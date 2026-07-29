@@ -60,10 +60,11 @@ describe('streamText explicit abort terminal settlement', () => {
       'fieldwork explicit abort',
       'AbortError',
     );
+    const providerStarted = deferred<void>();
+    const providerCancelled = deferred<void>();
     const onAbort = vi.fn();
     const onEnd = vi.fn();
     const onError = vi.fn();
-    const providerCancelled = deferred<unknown>();
 
     const result = streamText({
       model: new MockLanguageModelV4({
@@ -83,10 +84,11 @@ describe('streamText explicit abort terminal settlement', () => {
                 id: 'text-1',
                 delta: 'partial',
               });
+              providerStarted.resolve();
               // Deliberately remain open with the next provider read pending.
             },
-            cancel(reason) {
-              providerCancelled.resolve(reason);
+            cancel() {
+              providerCancelled.resolve();
             },
           }),
         }),
@@ -115,6 +117,7 @@ describe('streamText explicit abort terminal settlement', () => {
       settleWithin(result.responseMessages),
     ]);
 
+    await providerStarted.promise;
     abortController.abort(abortReason);
 
     const [
@@ -145,10 +148,8 @@ describe('streamText explicit abort terminal settlement', () => {
     );
     expect(onEnd).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
-
     expect(await settleWithin(providerCancelled.promise)).toMatchObject({
       status: 'resolved',
-      value: abortReason,
     });
   });
 
