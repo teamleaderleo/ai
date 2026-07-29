@@ -12,8 +12,9 @@ export function validateSseKeepAliveMs(keepAliveMs: number): void {
  *
  * The wrapper keeps at most one source read pending. Heartbeats are emitted only
  * when the response branch has demand, so a slow or disconnected client does
- * not accumulate an unbounded queue of comments. Cancelling the wrapper cancels
- * its source branch and clears the timer.
+ * not accumulate an unbounded queue of comments. Cancelling the wrapper requests
+ * cancellation of its source branch and clears the timer without waiting for an
+ * independent tee branch to finish.
  */
 export function createSseKeepAliveStream({
   stream,
@@ -92,10 +93,14 @@ export function createSseKeepAliveStream({
       }
     },
 
-    async cancel(reason) {
+    cancel(reason) {
       closed = true;
       clearTimer();
-      await reader.cancel(reason);
+
+      // A branch produced by ReadableStream.tee() may keep its cancel promise
+      // pending until the other branch finishes. Client disconnect handling
+      // must not wait for an independent persistence or resumable consumer.
+      void reader.cancel(reason).catch(() => {});
     },
   });
 }
