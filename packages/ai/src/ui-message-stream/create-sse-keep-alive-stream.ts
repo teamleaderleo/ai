@@ -62,6 +62,12 @@ export function createSseKeepAliveStream({
       try {
         const { done, value } = await reader.read();
 
+        // Cancellation can resolve the pending source read after the wrapper's
+        // controller has already been cancelled. Do not close or error it again.
+        if (closed) {
+          return;
+        }
+
         if (done) {
           closed = true;
           clearTimer();
@@ -72,6 +78,10 @@ export function createSseKeepAliveStream({
         controller.enqueue(value);
         scheduleHeartbeat(controller);
       } catch (error) {
+        if (closed) {
+          return;
+        }
+
         closed = true;
         clearTimer();
         controller.error(error);
