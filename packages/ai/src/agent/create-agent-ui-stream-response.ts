@@ -33,7 +33,8 @@ import { createAgentUIStream } from './create-agent-ui-stream';
  * @param headers - Additional headers for the response. Optional.
  * @param status - The status code for the response. Optional.
  * @param statusText - The status text for the response. Optional.
- * @param consumeSseStream - Whether to consume the SSE stream. Optional.
+ * @param consumeSseStream - Whether to consume the canonical SSE stream. Optional.
+ * @param keepAliveMs - Interval for client-response SSE keep-alive comments. Optional.
  *
  * @returns The response object.
  */
@@ -48,6 +49,7 @@ export async function createAgentUIStreamResponse<
   status,
   statusText,
   consumeSseStream,
+  keepAliveMs,
   ...options
 }: {
   agent: Agent<CALL_OPTIONS, TOOLS, RUNTIME_CONTEXT, OUTPUT>;
@@ -69,6 +71,7 @@ export async function createAgentUIStreamResponse<
     status,
     statusText,
     consumeSseStream,
+    keepAliveMs,
     stream: await createAgentUIStream(options),
   });
 }
