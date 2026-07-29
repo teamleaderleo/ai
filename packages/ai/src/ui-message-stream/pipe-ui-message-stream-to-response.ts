@@ -1,6 +1,10 @@
 import type { ServerResponse } from 'node:http';
 import { prepareHeaders } from '../util/prepare-headers';
 import { writeToServerResponse } from '../util/write-to-server-response';
+import {
+  createSseKeepAliveStream,
+  validateSseKeepAliveMs,
+} from './create-sse-keep-alive-stream';
 import { JsonToSseTransformStream } from './json-to-sse-transform-stream';
 import { UI_MESSAGE_STREAM_HEADERS } from './ui-message-stream-headers';
 import type { UIMessageChunk } from './ui-message-chunks';
@@ -12,10 +16,11 @@ import type { UIMessageStreamResponseInit } from './ui-message-stream-response-i
  *
  * @param options.response - The Node.js ServerResponse object to write to.
  * @param options.status - The HTTP status code for the response.
- * @param options.statusText - The HTTP status text for the response.
- * @param options.headers - Additional HTTP headers to include in the response.
+ * @param options.statusText - The status text for the response.
+ * @param options.headers - Additional headers to include in the response.
  * @param options.stream - The UI message chunk stream to send.
- * @param options.consumeSseStream - Optional callback to consume a copy of the SSE stream independently.
+ * @param options.consumeSseStream - Optional callback to consume a copy of the canonical SSE stream independently.
+ * @param options.keepAliveMs - Optional interval for immediate and periodic SSE comments on the client response branch.
  * @returns A promise that resolves when the stream has been written.
  */
 export function pipeUIMessageStreamToResponse({
@@ -25,10 +30,17 @@ export function pipeUIMessageStreamToResponse({
   headers,
   stream,
   consumeSseStream,
+  keepAliveMs,
 }: {
   response: ServerResponse;
   stream: ReadableStream<UIMessageChunk>;
 } & UIMessageStreamResponseInit): Promise<void> {
+  if (keepAliveMs != null) {
+    // Validate before locking or teeing the source and before invoking the
+    // independently running consumeSseStream callback.
+    validateSseKeepAliveMs(keepAliveMs);
+  }
+
   let sseStream = stream.pipeThrough(new JsonToSseTransformStream());
 
   // when the consumeSseStream is provided, we need to tee the stream
@@ -38,6 +50,13 @@ export function pipeUIMessageStreamToResponse({
     const [stream1, stream2] = sseStream.tee();
     sseStream = stream1;
     consumeSseStream({ stream: stream2 }); // no await (do not block the response)
+  }
+
+  // Heartbeats belong only to the client response branch. Persistence,
+  // logging, or resumable consumers receive the canonical SSE data without
+  // synthetic comment frames.
+  if (keepAliveMs != null) {
+    sseStream = createSseKeepAliveStream({ stream: sseStream, keepAliveMs });
   }
 
   return writeToServerResponse({
