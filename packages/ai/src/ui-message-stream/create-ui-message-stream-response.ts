@@ -1,5 +1,8 @@
 import { prepareHeaders } from '../util/prepare-headers';
-import { createSseKeepAliveStream } from './create-sse-keep-alive-stream';
+import {
+  createSseKeepAliveStream,
+  validateSseKeepAliveMs,
+} from './create-sse-keep-alive-stream';
 import { JsonToSseTransformStream } from './json-to-sse-transform-stream';
 import { UI_MESSAGE_STREAM_HEADERS } from './ui-message-stream-headers';
 import type { UIMessageChunk } from './ui-message-chunks';
@@ -28,6 +31,12 @@ export function createUIMessageStreamResponse({
 }: UIMessageStreamResponseInit & {
   stream: ReadableStream<UIMessageChunk>;
 }): Response {
+  if (keepAliveMs != null) {
+    // Validate before locking or teeing the source and before invoking the
+    // independently running consumeSseStream callback.
+    validateSseKeepAliveMs(keepAliveMs);
+  }
+
   let sseStream = stream.pipeThrough(new JsonToSseTransformStream());
 
   // when the consumeSseStream is provided, we need to tee the stream
