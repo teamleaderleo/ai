@@ -1,4 +1,5 @@
 import { prepareHeaders } from '../util/prepare-headers';
+import { createSseKeepAliveStream } from './create-sse-keep-alive-stream';
 import { JsonToSseTransformStream } from './json-to-sse-transform-stream';
 import { UI_MESSAGE_STREAM_HEADERS } from './ui-message-stream-headers';
 import type { UIMessageChunk } from './ui-message-chunks';
@@ -13,6 +14,7 @@ import type { UIMessageStreamResponseInit } from './ui-message-stream-response-i
  * @param options.headers - Additional HTTP headers to include in the response.
  * @param options.stream - The UI message chunk stream to send.
  * @param options.consumeSseStream - Optional callback to consume a copy of the SSE stream independently.
+ * @param options.keepAliveMs - Optional interval for immediate and periodic SSE comments on the client response branch.
  *
  * @returns A `Response` object with the UI message stream as the body.
  */
@@ -22,6 +24,7 @@ export function createUIMessageStreamResponse({
   headers,
   stream,
   consumeSseStream,
+  keepAliveMs,
 }: UIMessageStreamResponseInit & {
   stream: ReadableStream<UIMessageChunk>;
 }): Response {
@@ -34,6 +37,13 @@ export function createUIMessageStreamResponse({
     const [stream1, stream2] = sseStream.tee();
     sseStream = stream1;
     consumeSseStream({ stream: stream2 }); // no await (do not block the response)
+  }
+
+  // Heartbeats belong only to the client response branch. Persistence,
+  // logging, or resumable consumers receive the canonical SSE data without
+  // synthetic comment frames.
+  if (keepAliveMs != null) {
+    sseStream = createSseKeepAliveStream({ stream: sseStream, keepAliveMs });
   }
 
   return new Response(sseStream.pipeThrough(new TextEncoderStream()), {
