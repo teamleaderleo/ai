@@ -58,14 +58,17 @@ describe('streamText UI response keepAliveMs', () => {
     await reader.cancel();
   });
 
-  it('forwards keepAliveMs through pipeUIMessageStreamToResponse', async () => {
-    const response = createMockServerResponse();
+  it(
+    'forwards keepAliveMs through pipeUIMessageStreamToResponse',
+    async () => {
+      const response = createMockServerResponse();
 
-    await createResult().pipeUIMessageStreamToResponse(response, {
-      keepAliveMs: 1000,
-    });
-    await response.waitForEnd();
+      await createResult().pipeUIMessageStreamToResponse(response, {
+        keepAliveMs: 1000,
+      });
+      await response.waitForEnd();
 
-    expect(response.getDecodedChunks()[0]).toBe(': stream-open\n\n');
-  });
+      expect(response.getDecodedChunks()[0]).toBe(': stream-open\n\n');
+    },
+  );
 });
