@@ -85,8 +85,14 @@ describe('createUIMessageStreamResponse keepAliveMs', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('clears the heartbeat timer and cancels the source branch', async () => {
-    const sourceCancel = vi.fn();
+  it('clears the heartbeat timer and eventually cancels the source branch', async () => {
+    let resolveSourceCancelled!: () => void;
+    const sourceCancelled = new Promise<void>(resolve => {
+      resolveSourceCancelled = resolve;
+    });
+    const sourceCancel = vi.fn(() => {
+      resolveSourceCancelled();
+    });
     const source = new ReadableStream<UIMessageChunk>({
       cancel: sourceCancel,
     });
@@ -100,6 +106,9 @@ describe('createUIMessageStreamResponse keepAliveMs', () => {
     await reader.read();
     await reader.cancel(new Error('client disconnected'));
 
+    // The client cancellation promise is deliberately independent of the
+    // downstream source branch, but cancellation still propagates eventually.
+    await sourceCancelled;
     expect(sourceCancel).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
