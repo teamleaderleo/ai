@@ -59,8 +59,15 @@ export async function POST(req: Request) {
     );
   }
 
-  // save the user message
-  saveChat({ id, messages, activeStreamId: null });
+  // Save the user message and clear cancellation from the previous run before
+  // starting the next provider request. Awaiting the write prevents the first
+  // onChunk check from observing stale cancellation state.
+  await saveChat({
+    id,
+    messages,
+    activeStreamId: null,
+    canceledAt: null,
+  });
 
   const userStopSignal = new AbortController();
 
@@ -90,8 +97,8 @@ export async function POST(req: Request) {
           return { createdAt: Date.now() };
         }
       },
-      onFinish: ({ messages }) => {
-        saveChat({ id, messages, activeStreamId: null });
+      onFinish: async ({ messages }) => {
+        await saveChat({ id, messages, activeStreamId: null });
       },
     }),
     async consumeSseStream({ stream }) {
@@ -102,7 +109,7 @@ export async function POST(req: Request) {
       await streamContext.createNewResumableStream(streamId, () => stream);
 
       // update the chat with the streamId
-      saveChat({ id, activeStreamId: streamId });
+      await saveChat({ id, activeStreamId: streamId });
     },
   });
 }
