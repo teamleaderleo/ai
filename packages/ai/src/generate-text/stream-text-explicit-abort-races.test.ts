@@ -51,110 +51,150 @@ function expectAbortRejection(
 }
 
 describe('streamText explicit abort races', () => {
-  it.fails(
-    'does not let a pending onAbort callback delay provider cancellation or outward stream closure',
-    async () => {
-      const abortController = new AbortController();
-      const abortReason = new DOMException('stop now', 'AbortError');
-      const providerStarted = deferred<void>();
-      const providerCancelled = deferred<void>();
-      const releaseOnAbort = deferred<void>();
+  it.fails('does not let a pending onAbort callback delay provider cancellation or outward stream closure', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('stop now', 'AbortError');
+    const providerStarted = deferred<void>();
+    const providerCancelled = deferred<void>();
+    const releaseOnAbort = deferred<void>();
 
-      const result = streamText({
-        model: new MockLanguageModelV4({
-          doStream: async () => ({
-            stream: new ReadableStream<LanguageModelV4StreamPart>({
-              start(controller) {
-                controller.enqueue({ type: 'stream-start', warnings: [] });
-                providerStarted.resolve();
-              },
-              cancel() {
-                providerCancelled.resolve();
-              },
-            }),
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => ({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              providerStarted.resolve();
+            },
+            cancel() {
+              providerCancelled.resolve();
+            },
           }),
         }),
-        prompt: 'test-input',
-        abortSignal: abortController.signal,
-        onAbort: vi.fn(() => releaseOnAbort.promise),
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort: vi.fn(() => releaseOnAbort.promise),
+    });
+
+    const streamOutcomePromise = collectStream(result.stream);
+
+    await providerStarted.promise;
+    abortController.abort(abortReason);
+
+    try {
+      // Result settlement should not depend on callback completion.
+      expectAbortRejection(await settleWithin(result.steps, 50), abortReason);
+
+      // Desired contract: provider cancellation and outward closure are terminal
+      // mechanics and therefore must not wait for an observability callback.
+      expect(await settleWithin(providerCancelled.promise, 50)).toMatchObject({
+        status: 'resolved',
       });
+      expect(await settleWithin(streamOutcomePromise, 50)).toMatchObject({
+        status: 'resolved',
+      });
+    } finally {
+      releaseOnAbort.resolve();
+      await streamOutcomePromise;
+    }
+  });
 
-      const streamOutcomePromise = collectStream(result.stream);
+  it.fails('keeps abort as the single outward outcome when a provider error arrives immediately afterward', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('caller stopped', 'AbortError');
+    const providerStarted = deferred<void>();
+    const providerError = new Error('provider failed after abort');
+    let providerController:
+      | ReadableStreamDefaultController<LanguageModelV4StreamPart>
+      | undefined;
+    const onAbort = vi.fn();
+    const onError = vi.fn();
 
-      await providerStarted.promise;
-      abortController.abort(abortReason);
-
-      try {
-        // Result settlement should not depend on callback completion.
-        expectAbortRejection(
-          await settleWithin(result.steps, 50),
-          abortReason,
-        );
-
-        // Desired contract: provider cancellation and outward closure are terminal
-        // mechanics and therefore must not wait for an observability callback.
-        expect(
-          await settleWithin(providerCancelled.promise, 50),
-        ).toMatchObject({
-          status: 'resolved',
-        });
-        expect(await settleWithin(streamOutcomePromise, 50)).toMatchObject({
-          status: 'resolved',
-        });
-      } finally {
-        releaseOnAbort.resolve();
-        await streamOutcomePromise;
-      }
-    },
-  );
-
-  it.fails(
-    'keeps abort as the single outward outcome when a provider error arrives immediately afterward',
-    async () => {
-      const abortController = new AbortController();
-      const abortReason = new DOMException('caller stopped', 'AbortError');
-      const providerStarted = deferred<void>();
-      const providerError = new Error('provider failed after abort');
-      let providerController:
-        | ReadableStreamDefaultController<LanguageModelV4StreamPart>
-        | undefined;
-      const onAbort = vi.fn();
-      const onError = vi.fn();
-
-      const result = streamText({
-        model: new MockLanguageModelV4({
-          doStream: async () => ({
-            stream: new ReadableStream<LanguageModelV4StreamPart>({
-              start(controller) {
-                providerController = controller;
-                controller.enqueue({ type: 'stream-start', warnings: [] });
-                providerStarted.resolve();
-              },
-            }),
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => ({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              providerController = controller;
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              providerStarted.resolve();
+            },
           }),
         }),
-        prompt: 'test-input',
-        abortSignal: abortController.signal,
-        onAbort,
-        onError,
-      });
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort,
+      onError,
+    });
 
-      const streamOutcomePromise = collectStream(result.stream);
+    const streamOutcomePromise = collectStream(result.stream);
 
-      await providerStarted.promise;
-      abortController.abort(abortReason);
+    await providerStarted.promise;
+    abortController.abort(abortReason);
 
-      // Abort listeners run synchronously until their first await. Triggering the
-      // provider error here deterministically exercises the competing pull path.
-      providerController?.error(providerError);
+    // Abort listeners run synchronously until their first await. Triggering the
+    // provider error here deterministically exercises the competing pull path.
+    providerController?.error(providerError);
 
-      expectAbortRejection(await settleWithin(result.steps), abortReason);
+    expectAbortRejection(await settleWithin(result.steps), abortReason);
 
-      const streamOutcome = await streamOutcomePromise;
-      expect(streamOutcome.status).toBe('resolved');
-      if (streamOutcome.status === 'resolved') {
+    const streamOutcome = await streamOutcomePromise;
+    expect(streamOutcome.status).toBe('resolved');
+    if (streamOutcome.status === 'resolved') {
+      expect(
+        streamOutcome.parts.filter(
+          part =>
+            typeof part === 'object' &&
+            part != null &&
+            'type' in part &&
+            part.type === 'abort',
+        ),
+      ).toHaveLength(1);
+    }
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('emits one abort outcome to each active consumer while invoking onAbort once', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('shared stop', 'AbortError');
+    const providerStarted = deferred<void>();
+    const providerCancel = vi.fn();
+    const onAbort = vi.fn();
+
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => ({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              providerStarted.resolve();
+            },
+            cancel: providerCancel,
+          }),
+        }),
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort,
+    });
+
+    const firstConsumer = collectStream(result.stream);
+    const secondConsumer = collectStream(result.stream);
+    const stepsOutcomePromise = settleWithin(result.steps);
+
+    await providerStarted.promise;
+    abortController.abort(abortReason);
+
+    expectAbortRejection(await stepsOutcomePromise, abortReason);
+
+    for (const outcome of await Promise.all([firstConsumer, secondConsumer])) {
+      expect(outcome.status).toBe('resolved');
+      if (outcome.status === 'resolved') {
         expect(
-          streamOutcome.parts.filter(
+          outcome.parts.filter(
             part =>
               typeof part === 'object' &&
               part != null &&
@@ -163,66 +203,9 @@ describe('streamText explicit abort races', () => {
           ),
         ).toHaveLength(1);
       }
-      expect(onAbort).toHaveBeenCalledTimes(1);
-      expect(onError).not.toHaveBeenCalled();
-    },
-  );
+    }
 
-  it(
-    'emits one abort outcome to each active consumer while invoking onAbort once',
-    async () => {
-      const abortController = new AbortController();
-      const abortReason = new DOMException('shared stop', 'AbortError');
-      const providerStarted = deferred<void>();
-      const providerCancel = vi.fn();
-      const onAbort = vi.fn();
-
-      const result = streamText({
-        model: new MockLanguageModelV4({
-          doStream: async () => ({
-            stream: new ReadableStream<LanguageModelV4StreamPart>({
-              start(controller) {
-                controller.enqueue({ type: 'stream-start', warnings: [] });
-                providerStarted.resolve();
-              },
-              cancel: providerCancel,
-            }),
-          }),
-        }),
-        prompt: 'test-input',
-        abortSignal: abortController.signal,
-        onAbort,
-      });
-
-      const firstConsumer = collectStream(result.stream);
-      const secondConsumer = collectStream(result.stream);
-      const stepsOutcomePromise = settleWithin(result.steps);
-
-      await providerStarted.promise;
-      abortController.abort(abortReason);
-
-      expectAbortRejection(await stepsOutcomePromise, abortReason);
-
-      for (const outcome of await Promise.all([
-        firstConsumer,
-        secondConsumer,
-      ])) {
-        expect(outcome.status).toBe('resolved');
-        if (outcome.status === 'resolved') {
-          expect(
-            outcome.parts.filter(
-              part =>
-                typeof part === 'object' &&
-                part != null &&
-                'type' in part &&
-                part.type === 'abort',
-            ),
-          ).toHaveLength(1);
-        }
-      }
-
-      expect(onAbort).toHaveBeenCalledTimes(1);
-      expect(providerCancel).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(providerCancel).toHaveBeenCalledTimes(1);
+  });
 });
