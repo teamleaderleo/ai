@@ -21,12 +21,14 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Print repository formatter diff
+      - name: Print exact repository formatter output
         run: |
           pnpm run fix
-          git --no-pager diff --no-ext-diff --unified=100 -- \
-            packages/ai/src/generate-text/stream-text-explicit-abort.test.ts \
-            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
-          test -z "$(git status --short -- \
-            packages/ai/src/generate-text/stream-text-explicit-abort.test.ts \
-            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts)"
+          echo 'BEGIN_ABORT_TEST_BASE64'
+          base64 -w0 packages/ai/src/generate-text/stream-text-explicit-abort.test.ts
+          echo
+          echo 'END_ABORT_TEST_BASE64'
+          echo 'BEGIN_ABORT_RACES_BASE64'
+          base64 -w0 packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
+          echo
+          echo 'END_ABORT_RACES_BASE64'
