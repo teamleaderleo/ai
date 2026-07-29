@@ -31,6 +31,10 @@ const response = createUIMessageStreamResponse({
   headers: {
     'Custom-Header': 'value',
   },
+  // Optional for self-hosted deployments behind proxies that close idle
+  // connections. Emits an immediate SSE comment and then an idle comment
+  // every 25 seconds without adding synthetic chunks to the UI protocol.
+  keepAliveMs: 25_000,
   stream: createUIMessageStream({
     execute({ writer }) {
       // Write custom data (type must be 'data-<name>')
@@ -74,6 +78,8 @@ const response = createUIMessageStreamResponse({
 });
 ```
 
+When `keepAliveMs` is set, comments are added only to the client response branch. A `consumeSseStream` callback still receives the canonical SSE data without synthetic keep-alive comments, which keeps persistence and resumable-stream storage unchanged.
+
 ## API Signature
 
 ### Parameters
@@ -108,7 +114,14 @@ const response = createUIMessageStreamResponse({
       type: '(options: { stream: ReadableStream<string> }) => PromiseLike<void> | void',
       isOptional: true,
       description:
-        'Optional callback to consume the Server-Sent Events stream.',
+        'Optional callback to consume the canonical Server-Sent Events stream. Synthetic keep-alive comments are not included.',
+    },
+    {
+      name: 'keepAliveMs',
+      type: 'number',
+      isOptional: true,
+      description:
+        'Optional positive interval in milliseconds. Emits an immediate SSE comment so the response can flush, then emits a comment after each idle interval on the client response branch. Useful for self-hosted deployments behind reverse proxies with idle connection timeouts.',
     },
   ]}
 />
