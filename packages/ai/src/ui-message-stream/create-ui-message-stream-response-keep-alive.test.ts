@@ -104,6 +104,26 @@ describe('createUIMessageStreamResponse keepAliveMs', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('does not wait for an independent consumeSseStream branch when the client cancels', async () => {
+    let persistenceStream!: ReadableStream<string>;
+    const source = new ReadableStream<UIMessageChunk>();
+    const response = createUIMessageStreamResponse({
+      stream: source,
+      keepAliveMs: 1000,
+      consumeSseStream({ stream }) {
+        persistenceStream = stream;
+      },
+    });
+    const reader = decode(response).getReader();
+
+    await reader.read();
+    await expect(reader.cancel('client disconnected')).resolves.toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+
+    // The independent branch can continue or clean up on its own schedule.
+    await persistenceStream.cancel('test cleanup');
+  });
+
   it('keeps synthetic comments out of consumeSseStream', async () => {
     let sourceController!: ReadableStreamDefaultController<UIMessageChunk>;
     const source = new ReadableStream<UIMessageChunk>({
