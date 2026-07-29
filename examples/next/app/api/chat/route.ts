@@ -1,5 +1,9 @@
 import type { MyUIMessage } from '@/util/chat-schema';
-import { readChat, saveChat } from '@util/chat-store';
+import {
+  prepareChatForNewRun,
+  readChat,
+  saveChat,
+} from '@util/chat-store';
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
@@ -59,15 +63,10 @@ export async function POST(req: Request) {
     );
   }
 
-  // Save the user message and clear cancellation from the previous run before
-  // starting the next provider request. Awaiting the write prevents the first
-  // onChunk check from observing stale cancellation state.
-  await saveChat({
-    id,
-    messages,
-    activeStreamId: null,
-    canceledAt: null,
-  });
+  // Complete the sequential new-run state transition before constructing the
+  // provider request. The helper is deliberately narrower than run-scoped
+  // ownership; delayed or concurrent Stop requests still require a run ID.
+  await prepareChatForNewRun({ id, messages });
 
   const userStopSignal = new AbortController();
 
