@@ -1,6 +1,12 @@
 const STREAM_OPEN_COMMENT = ': stream-open\n\n';
 const KEEP_ALIVE_COMMENT = ': keep-alive\n\n';
 
+export function validateSseKeepAliveMs(keepAliveMs: number): void {
+  if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0) {
+    throw new TypeError('keepAliveMs must be a finite number greater than 0.');
+  }
+}
+
 /**
  * Adds an immediate SSE comment and periodic idle comments to a string stream.
  *
@@ -16,9 +22,7 @@ export function createSseKeepAliveStream({
   stream: ReadableStream<string>;
   keepAliveMs: number;
 }): ReadableStream<string> {
-  if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0) {
-    throw new TypeError('keepAliveMs must be a finite number greater than 0.');
-  }
+  validateSseKeepAliveMs(keepAliveMs);
 
   const reader = stream.getReader();
   let timer: ReturnType<typeof setTimeout> | undefined;
