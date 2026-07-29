@@ -142,14 +142,20 @@ describe('createUIMessageStreamResponse keepAliveMs', () => {
   });
 
   it.each([0, -1, Number.POSITIVE_INFINITY, Number.NaN])(
-    'rejects invalid interval %s',
+    'rejects invalid interval %s before locking or teeing the source',
     keepAliveMs => {
+      const source = new ReadableStream<UIMessageChunk>();
+      const consumeSseStream = vi.fn();
+
       expect(() =>
         createUIMessageStreamResponse({
-          stream: new ReadableStream<UIMessageChunk>(),
+          stream: source,
           keepAliveMs,
+          consumeSseStream,
         }),
       ).toThrow('keepAliveMs must be a finite number greater than 0.');
+      expect(source.locked).toBe(false);
+      expect(consumeSseStream).not.toHaveBeenCalled();
     },
   );
 });
