@@ -1,7 +1,9 @@
 import { convertArrayToReadableStream } from '@ai-sdk/provider-utils/test';
 import { describe, expect, it } from 'vitest';
 import { MockLanguageModelV4 } from '../test/mock-language-model-v4';
-import { createAgentUIStreamResponse } from './create-agent-ui-stream-response';
+import {
+  createAgentUIStreamResponse,
+} from './create-agent-ui-stream-response';
 import { ToolLoopAgent } from './tool-loop-agent';
 
 const testUsage = {
