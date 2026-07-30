@@ -79,6 +79,28 @@ jobs:
               + new_catch
               + text[catch_condition_at + len(old_catch):]
           )
+
+          provider_result_at = text.index(
+              '            stream: languageModelStream,', abort_start
+          )
+          first_chunk_timeout_at = text.index(
+              '          startFirstChunkTimeout();', provider_result_at
+          )
+          pre_registration_cancel = (
+              '          // Abort may win after the provider created its stream but before\n'
+              '          // the stream is registered with the stitchable owner. Cancel the\n'
+              '          // still-unlocked provider stream directly in that gap.\n'
+              '          if (abortSignal?.aborted) {\n'
+              '            cleanupStepTimeouts();\n'
+              '            await languageModelStream.cancel(getAbortReason());\n'
+              '            return;\n'
+              '          }\n\n'
+          )
+          text = (
+              text[:first_chunk_timeout_at]
+              + pre_registration_cancel
+              + text[first_chunk_timeout_at:]
+          )
           source.write_text(text, encoding='utf-8')
 
           tests = Path(
