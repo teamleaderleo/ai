@@ -1,0 +1,64 @@
+name: Fieldwork resumable Stop state
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-resumable-stop-state.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-resumable-stop-state
+  cancel-in-progress: true
+
+jobs:
+  focused-example:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: 56453af2c2688d158d4291293a11dfe34db260e7
+          fetch-depth: 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run focused file-store regression
+        run: >-
+          pnpm exec vitest --run
+          examples/next/util/chat-store.test.ts
+          --environment node
+
+      - name: Check changed files
+        run: >-
+          pnpm exec ultracite check
+          examples/next/app/api/chat/route.ts
+          examples/next/util/chat-store.ts
+          examples/next/util/chat-store.test.ts
+
+      - name: Record exact receipt
+        run: |
+          printf '%s\n' \
+            'candidate=resumable Stop sequential mitigation' \
+            'sha=56453af2c2688d158d4291293a11dfe34db260e7' \
+            "node=$(node --version)" \
+            "pnpm=$(pnpm --version)" \
+            'ordinary_case=stale Stop cleared before next ordered run' \
+            'expected_failure=delayed Stop still targets chat rather than run'
