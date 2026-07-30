@@ -1,0 +1,151 @@
+name: Fieldwork explicit abort terminal repair
+
+on:
+  push:
+    branches:
+      - fieldwork/explicit-abort-terminal-settlement-repair
+    paths:
+      - .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-explicit-abort-terminal-repair
+  cancel-in-progress: false
+
+jobs:
+  repair-test-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: fieldwork/explicit-abort-terminal-settlement-repair
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply terminal-ordering repair
+        shell: python
+        run: |
+          from pathlib import Path
+          from textwrap import dedent
+
+          source = Path('packages/ai/src/generate-text/stream-text.ts')
+          text = source.read_text(encoding='utf-8')
+          old = dedent('''\
+                abortPromise = (async () => {
+                  const reason = getAbortReason();
+
+                  self.rejectResultPromises(reason);
+
+                  await notify({
+                    event: {
+                      callId,
+                      steps: recordedSteps,
+                      ...(reason !== undefined ? { reason } : {}),
+                    },
+                    callbacks: [onAbort, telemetryDispatcher.onAbort],
+                  });
+
+                  if (!streamClosed) {
+                    controller.enqueue({
+                      type: 'abort',
+                      // The `reason` is usually of type DOMException, but it can also be of any type,
+                      // so we use getErrorMessage for serialization because it is already designed to accept values of the unknown type.
+                      // See: https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/reason
+                      ...(reason !== undefined
+                        ? { reason: getErrorMessage(reason) }
+                        : {}),
+                    });
+                    closeController(controller);
+                  }
+
+                  void reader.cancel(reason).catch(() => {});
+                })();
+          ''')
+          new = dedent('''\
+                abortPromise = (async () => {
+                  const reason = getAbortReason();
+
+                  // Claim and publish the terminal outcome before running
+                  // observability callbacks. A slow callback must not keep the
+                  // provider reader or outward stream alive after caller abort.
+                  self.rejectResultPromises(reason);
+
+                  if (!streamClosed) {
+                    controller.enqueue({
+                      type: 'abort',
+                      // The `reason` is usually of type DOMException, but it can also be of any type,
+                      // so we use getErrorMessage for serialization because it is already designed to accept values of the unknown type.
+                      // See: https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/reason
+                      ...(reason !== undefined
+                        ? { reason: getErrorMessage(reason) }
+                        : {}),
+                    });
+                    closeController(controller);
+                  }
+
+                  void reader.cancel(reason).catch(() => {});
+                  void notify({
+                    event: {
+                      callId,
+                      steps: recordedSteps,
+                      ...(reason !== undefined ? { reason } : {}),
+                    },
+                    callbacks: [onAbort, telemetryDispatcher.onAbort],
+                  });
+                })();
+          ''')
+          if text.count(old) != 1:
+              raise SystemExit('abort implementation anchor mismatch')
+          text = text.replace(old, new, 1)
+          old_catch = '          if (isAbortError(error) && abortSignal?.aborted) {'
+          new_catch = '          if (abortSignal?.aborted) {'
+          if text.count(old_catch) != 1:
+              raise SystemExit('abort catch anchor mismatch')
+          source.write_text(text.replace(old_catch, new_catch, 1), encoding='utf-8')
+
+          tests = Path(
+              'packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts'
+          )
+          text = tests.read_text(encoding='utf-8')
+          if text.count('  it.fails(') != 2:
+              raise SystemExit('expected exactly two retained race failures')
+          tests.write_text(text.replace('  it.fails(', '  it('), encoding='utf-8')
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run focused Node and Edge regressions
+        run: |
+          pnpm --dir packages/ai test:node -- \
+            src/generate-text/stream-text-explicit-abort.test.ts \
+            src/generate-text/stream-text-explicit-abort-races.test.ts
+          pnpm --dir packages/ai test:edge -- \
+            src/generate-text/stream-text-explicit-abort.test.ts \
+            src/generate-text/stream-text-explicit-abort-races.test.ts
+          pnpm --dir packages/ai type-check
+          pnpm exec ultracite check \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
+          git diff --check
+
+      - name: Publish repaired source and tests only
+        run: |
+          rm .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add packages/ai/src/generate-text .github
+          git commit -m 'fix(ai): make explicit abort terminal mechanics nonblocking'
+          git push origin HEAD:fieldwork/explicit-abort-terminal-settlement-repair
