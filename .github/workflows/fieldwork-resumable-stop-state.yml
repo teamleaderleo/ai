@@ -17,13 +17,13 @@ concurrency:
 jobs:
   focused-example:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Check out exact candidate head
         uses: actions/checkout@v4
         with:
-          ref: 56453af2c2688d158d4291293a11dfe34db260e7
+          ref: 656b6d6ec02b2db5077e49d41986068c387cb81f
           fetch-depth: 1
 
       - name: Setup pnpm
@@ -39,6 +39,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build workspace AI package for example resolution
+        run: pnpm --filter ai build
 
       - name: Run focused file-store regression
         run: >-
@@ -57,7 +60,7 @@ jobs:
         run: |
           printf '%s\n' \
             'candidate=resumable Stop sequential mitigation' \
-            'sha=56453af2c2688d158d4291293a11dfe34db260e7' \
+            'sha=656b6d6ec02b2db5077e49d41986068c387cb81f' \
             "node=$(node --version)" \
             "pnpm=$(pnpm --version)" \
             'ordinary_case=stale Stop cleared before next ordered run' \
