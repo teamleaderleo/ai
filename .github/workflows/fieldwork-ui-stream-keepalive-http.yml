@@ -1,0 +1,60 @@
+name: Fieldwork UI stream keep-alive HTTP
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .fieldwork/ui-stream-keepalive-http-probe.mjs
+      - .github/workflows/fieldwork-ui-stream-keepalive-http.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-ui-stream-keepalive-http
+  cancel-in-progress: true
+
+jobs:
+  node-http:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out execution carrier
+        uses: actions/checkout@v4
+        with:
+          path: carrier
+
+      - name: Check out exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: 7c8b95b12e7a47e0f614ff949b645e546488eea7
+          path: candidate
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: candidate/pnpm-lock.yaml
+
+      - name: Install candidate dependencies
+        working-directory: candidate
+        run: pnpm install --frozen-lockfile
+
+      - name: Run real HTTP and proxy liveness probe
+        working-directory: candidate
+        env:
+          EXPECTED_CANDIDATE_HEAD: 7c8b95b12e7a47e0f614ff949b645e546488eea7
+        run: pnpm exec tsx ../carrier/.fieldwork/ui-stream-keepalive-http-probe.mjs
+
+      - name: Record exact receipt
+        run: |
+          printf '%s\n' \
+            "candidate=$(git -C candidate rev-parse HEAD)" \
+            "carrier=$(git -C carrier rev-parse HEAD)" \
+            "node=$(node --version)" \
+            "pnpm=$(pnpm --version)"
