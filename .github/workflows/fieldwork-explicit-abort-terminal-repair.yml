@@ -9,14 +9,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fieldwork-explicit-abort-terminal-repair
   cancel-in-progress: true
 
 jobs:
-  repair-test:
+  repair-test-publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -25,7 +25,7 @@ jobs:
         with:
           ref: fieldwork/explicit-abort-terminal-settlement-repair
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Apply terminal-ordering repair
         shell: python
@@ -151,10 +151,14 @@ jobs:
             packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
           git diff --check
 
-      - name: Record experiment receipt
+      - name: Publish source and tests only
         run: |
-          printf '%s\n' \
-            "base=$(git rev-parse HEAD)" \
-            "node=$(node --version)" \
-            "pnpm=$(pnpm --version)"
-          git diff --stat
+          rm .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
+          git commit -m 'fix(ai): make explicit abort settlement deterministic'
+          git push origin HEAD:fieldwork/explicit-abort-terminal-settlement-repair
