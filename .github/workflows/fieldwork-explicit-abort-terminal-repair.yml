@@ -62,7 +62,6 @@ jobs:
               '          if (abortSignal?.aborted) {', read_at
           )
           done_at = text.index('          if (done) {', post_read_at)
-          old_post_read = text[post_read_at:done_at]
           new_post_read = (
               '          if (abortPromise != null || abortSignal?.aborted) {\n'
               '            await abort(controller);\n'
@@ -106,12 +105,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run focused Node and Edge regressions
+      - name: Build the AI package dependency closure
+        run: pnpm turbo build --filter=ai...
+
+      - name: Run exact Node and Edge regressions
         run: |
-          pnpm --dir packages/ai test:node -- \
+          pnpm --dir packages/ai exec vitest \
+            --config vitest.node.config.js --run \
             src/generate-text/stream-text-explicit-abort.test.ts \
             src/generate-text/stream-text-explicit-abort-races.test.ts
-          pnpm --dir packages/ai test:edge -- \
+          pnpm --dir packages/ai exec vitest \
+            --config vitest.edge.config.js --run \
             src/generate-text/stream-text-explicit-abort.test.ts \
             src/generate-text/stream-text-explicit-abort-races.test.ts
           pnpm --dir packages/ai type-check
