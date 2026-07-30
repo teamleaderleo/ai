@@ -35,59 +35,51 @@ jobs:
           source = Path('packages/ai/src/generate-text/stream-text.ts')
           text = source.read_text(encoding='utf-8')
 
-          notify_block = """        await notify({
-            event: {
-              callId,
-              steps: recordedSteps,
-              ...(reason !== undefined ? { reason } : {}),
-            },
-            callbacks: [onAbort, telemetryDispatcher.onAbort],
-          });
+          abort_start = text.index('      abortPromise = (async () => {')
+          notify_start = text.index('        await notify({', abort_start)
+          notify_end = text.index('\n\n        if (!streamClosed)', notify_start)
+          notify_block = text[notify_start:notify_end]
+          if 'callbacks: [onAbort, telemetryDispatcher.onAbort]' not in notify_block:
+              raise SystemExit('located the wrong notify block')
+          text = text[:notify_start] + text[notify_end + 2:]
 
-          """
-          if text.count(notify_block) != 1:
-              raise SystemExit('abort notify block mismatch')
-          text = text.replace(notify_block, '', 1)
+          cancel_line = '        void reader.cancel(reason).catch(() => {});\n'
+          cancel_at = text.index(cancel_line, abort_start)
+          deferred_notify = notify_block.replace('await notify(', 'void notify(', 1)
+          insertion = (
+              cancel_line
+              + '\n'
+              + '        // Terminal mechanics are complete before observability.\n'
+              + deferred_notify
+              + '\n'
+          )
+          text = text[:cancel_at] + insertion + text[cancel_at + len(cancel_line):]
 
-          cancel_line = "        void reader.cancel(reason).catch(() => {});\n"
-          notify_after = cancel_line + """
+          read_at = text.index(
+              '          const { done, value } = await reader.read();', abort_start
+          )
+          post_read_at = text.index(
+              '          if (abortSignal?.aborted) {', read_at
+          )
+          done_at = text.index('          if (done) {', post_read_at)
+          old_post_read = text[post_read_at:done_at]
+          new_post_read = (
+              '          if (abortPromise != null || abortSignal?.aborted) {\n'
+              '            await abort(controller);\n'
+              '            return;\n'
+              '          }\n\n'
+          )
+          text = text[:post_read_at] + new_post_read + text[done_at:]
 
-          // Terminal mechanics are complete. Observability callbacks may finish
-          // later; notify() contains callback errors.
-          void notify({
-            event: {
-              callId,
-              steps: recordedSteps,
-              ...(reason !== undefined ? { reason } : {}),
-            },
-            callbacks: [onAbort, telemetryDispatcher.onAbort],
-          });
-          """
-          if text.count(cancel_line) != 1:
-              raise SystemExit('abort reader-cancel line mismatch')
-          text = text.replace(cancel_line, notify_after, 1)
-
-          old_after_read = """          if (abortSignal?.aborted) {
-            await abort(controller);
-            return;
-          }
-
-          if (done) {"""
-          new_after_read = """          if (abortPromise != null || abortSignal?.aborted) {
-            await abort(controller);
-            return;
-          }
-
-          if (done) {"""
-          if text.count(old_after_read) != 1:
-              raise SystemExit('post-read abort block mismatch')
-          text = text.replace(old_after_read, new_after_read, 1)
-
+          catch_at = text.index('        } catch (error) {', read_at)
           old_catch = '          if (isAbortError(error) && abortSignal?.aborted) {'
+          catch_condition_at = text.index(old_catch, catch_at)
           new_catch = '          if (abortPromise != null || abortSignal?.aborted) {'
-          if text.count(old_catch) != 1:
-              raise SystemExit('abort catch mismatch')
-          text = text.replace(old_catch, new_catch, 1)
+          text = (
+              text[:catch_condition_at]
+              + new_catch
+              + text[catch_condition_at + len(old_catch):]
+          )
           source.write_text(text, encoding='utf-8')
 
           tests = Path(
