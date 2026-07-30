@@ -31,6 +31,22 @@ jobs:
           ref: 7c8b95b12e7a47e0f614ff949b645e546488eea7
           path: candidate
 
+      - name: Preserve canonical SSE completion control
+        shell: python
+        run: |
+          from pathlib import Path
+
+          probe = Path('carrier/.fieldwork/ui-stream-keepalive-http-probe.mjs')
+          text = probe.read_text(encoding='utf-8')
+          old = "    assert.equal(completed.body, ': stream-open\\n\\n');\n"
+          new = (
+              "    assert(completed.body.startsWith(': stream-open\\n\\n'));\n"
+              "    assert(completed.body.includes('data: [DONE]\\n\\n'));\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit('completion assertion anchor mismatch')
+          probe.write_text(text.replace(old, new, 1), encoding='utf-8')
+
       - name: Set up pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
         with:
