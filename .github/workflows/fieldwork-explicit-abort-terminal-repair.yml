@@ -31,113 +31,74 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          from textwrap import dedent
 
           source = Path('packages/ai/src/generate-text/stream-text.ts')
           text = source.read_text(encoding='utf-8')
-          old = dedent('''\
-                abortPromise = (async () => {
-                  const reason = getAbortReason();
 
-                  self.rejectResultPromises(reason);
+          notify_block = """        await notify({
+            event: {
+              callId,
+              steps: recordedSteps,
+              ...(reason !== undefined ? { reason } : {}),
+            },
+            callbacks: [onAbort, telemetryDispatcher.onAbort],
+          });
 
-                  await notify({
-                    event: {
-                      callId,
-                      steps: recordedSteps,
-                      ...(reason !== undefined ? { reason } : {}),
-                    },
-                    callbacks: [onAbort, telemetryDispatcher.onAbort],
-                  });
+          """
+          if text.count(notify_block) != 1:
+              raise SystemExit('abort notify block mismatch')
+          text = text.replace(notify_block, '', 1)
 
-                  if (!streamClosed) {
-                    controller.enqueue({
-                      type: 'abort',
-                      // The `reason` is usually of type DOMException, but it can also be of any type,
-                      // so we use getErrorMessage for serialization because it is already designed to accept values of the unknown type.
-                      // See: https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/reason
-                      ...(reason !== undefined
-                        ? { reason: getErrorMessage(reason) }
-                        : {}),
-                    });
-                    closeController(controller);
-                  }
+          cancel_line = "        void reader.cancel(reason).catch(() => {});\n"
+          notify_after = cancel_line + """
 
-                  void reader.cancel(reason).catch(() => {});
-                })();
-          ''')
-          new = dedent('''\
-                abortPromise = (async () => {
-                  const reason = getAbortReason();
+          // Terminal mechanics are complete. Observability callbacks may finish
+          // later; notify() contains callback errors.
+          void notify({
+            event: {
+              callId,
+              steps: recordedSteps,
+              ...(reason !== undefined ? { reason } : {}),
+            },
+            callbacks: [onAbort, telemetryDispatcher.onAbort],
+          });
+          """
+          if text.count(cancel_line) != 1:
+              raise SystemExit('abort reader-cancel line mismatch')
+          text = text.replace(cancel_line, notify_after, 1)
 
-                  // Claim and publish the terminal outcome before running
-                  // observability callbacks. A slow callback must not keep the
-                  // provider reader or outward stream alive after caller abort.
-                  self.rejectResultPromises(reason);
+          old_after_read = """          if (abortSignal?.aborted) {
+            await abort(controller);
+            return;
+          }
 
-                  if (!streamClosed) {
-                    controller.enqueue({
-                      type: 'abort',
-                      // The `reason` is usually of type DOMException, but it can also be of any type,
-                      // so we use getErrorMessage for serialization because it is already designed to accept values of the unknown type.
-                      // See: https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/reason
-                      ...(reason !== undefined
-                        ? { reason: getErrorMessage(reason) }
-                        : {}),
-                    });
-                    closeController(controller);
-                  }
+          if (done) {"""
+          new_after_read = """          if (abortPromise != null || abortSignal?.aborted) {
+            await abort(controller);
+            return;
+          }
 
-                  void reader.cancel(reason).catch(() => {});
-                  // notify() contains callback failures, so terminal mechanics
-                  // do not need to await observability completion.
-                  void notify({
-                    event: {
-                      callId,
-                      steps: recordedSteps,
-                      ...(reason !== undefined ? { reason } : {}),
-                    },
-                    callbacks: [onAbort, telemetryDispatcher.onAbort],
-                  });
-                })();
-          ''')
-          if text.count(old) != 1:
-              raise SystemExit('abort implementation anchor mismatch')
-          text = text.replace(old, new, 1)
-
-          old_after_read = dedent('''\
-                    if (abortSignal?.aborted) {
-                      await abort(controller);
-                      return;
-                    }
-
-                    if (done) {
-          ''')
-          new_after_read = dedent('''\
-                    if (abortPromise != null || abortSignal?.aborted) {
-                      await abort(controller);
-                      return;
-                    }
-
-                    if (done) {
-          ''')
+          if (done) {"""
           if text.count(old_after_read) != 1:
-              raise SystemExit('post-read abort anchor mismatch')
+              raise SystemExit('post-read abort block mismatch')
           text = text.replace(old_after_read, new_after_read, 1)
 
           old_catch = '          if (isAbortError(error) && abortSignal?.aborted) {'
           new_catch = '          if (abortPromise != null || abortSignal?.aborted) {'
           if text.count(old_catch) != 1:
-              raise SystemExit('abort catch anchor mismatch')
-          source.write_text(text.replace(old_catch, new_catch, 1), encoding='utf-8')
+              raise SystemExit('abort catch mismatch')
+          text = text.replace(old_catch, new_catch, 1)
+          source.write_text(text, encoding='utf-8')
 
           tests = Path(
               'packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts'
           )
-          text = tests.read_text(encoding='utf-8')
-          if text.count('  it.fails(') != 2:
+          test_text = tests.read_text(encoding='utf-8')
+          if test_text.count('  it.fails(') != 2:
               raise SystemExit('expected exactly two retained race failures')
-          tests.write_text(text.replace('  it.fails(', '  it('), encoding='utf-8')
+          tests.write_text(
+              test_text.replace('  it.fails(', '  it('), encoding='utf-8'
+          )
 
       - name: Set up pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
