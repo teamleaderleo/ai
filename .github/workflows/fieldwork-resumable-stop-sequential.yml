@@ -40,5 +40,18 @@ jobs:
         run: pnpm --filter ai... build
       - name: Execute sequential Stop-state cases
         run: pnpm exec vitest --run examples/next/util/chat-store.test.ts --environment node
-      - name: Verify repository formatting for changed source
-        run: pnpm exec ultracite check examples/next/app/api/chat/route.ts examples/next/util/chat-store.ts examples/next/util/chat-store.test.ts
+      - name: Expose exact repository formatting delta
+        run: |
+          pnpm exec ultracite fix \
+            examples/next/app/api/chat/route.ts \
+            examples/next/util/chat-store.ts \
+            examples/next/util/chat-store.test.ts
+          git diff --check
+          git diff -- \
+            examples/next/app/api/chat/route.ts \
+            examples/next/util/chat-store.ts \
+            examples/next/util/chat-store.test.ts
+          git diff --exit-code -- \
+            examples/next/app/api/chat/route.ts \
+            examples/next/util/chat-store.ts \
+            examples/next/util/chat-store.test.ts
