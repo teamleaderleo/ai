@@ -9,7 +9,6 @@ import {
   createIdGenerator,
   DelayedPromise,
   filterNullable,
-  isAbortError,
   type Arrayable,
   type Context,
   type Experimental_SandboxSession as SandboxSession,
@@ -1522,15 +1521,6 @@ class DefaultStreamTextResult<
 
         self.rejectResultPromises(reason);
 
-        await notify({
-          event: {
-            callId,
-            steps: recordedSteps,
-            ...(reason !== undefined ? { reason } : {}),
-          },
-          callbacks: [onAbort, telemetryDispatcher.onAbort],
-        });
-
         if (!streamClosed) {
           controller.enqueue({
             type: 'abort',
@@ -1545,6 +1535,16 @@ class DefaultStreamTextResult<
         }
 
         void reader.cancel(reason).catch(() => {});
+
+        // Terminal mechanics are complete before observability.
+        void notify({
+          event: {
+            callId,
+            steps: recordedSteps,
+            ...(reason !== undefined ? { reason } : {}),
+          },
+          callbacks: [onAbort, telemetryDispatcher.onAbort],
+        });
       })();
 
       return abortPromise;
@@ -1580,7 +1580,7 @@ class DefaultStreamTextResult<
 
           const { done, value } = await reader.read();
 
-          if (abortSignal?.aborted) {
+          if (abortPromise != null || abortSignal?.aborted) {
             await abort(controller);
             return;
           }
@@ -1592,7 +1592,7 @@ class DefaultStreamTextResult<
 
           controller.enqueue(value);
         } catch (error) {
-          if (isAbortError(error) && abortSignal?.aborted) {
+          if (abortPromise != null || abortSignal?.aborted) {
             await abort(controller);
           } else {
             streamClosed = true;
@@ -2113,6 +2113,15 @@ class DefaultStreamTextResult<
               }),
             ),
           );
+
+          // Abort may win after the provider created its stream but before
+          // the stream is registered with the stitchable owner. Cancel the
+          // still-unlocked provider stream directly in that gap.
+          if (abortSignal?.aborted) {
+            cleanupStepTimeouts();
+            await languageModelStream.cancel(getAbortReason());
+            return;
+          }
 
           startFirstChunkTimeout();
 

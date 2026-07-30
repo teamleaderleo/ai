@@ -51,7 +51,7 @@ function expectAbortRejection(
 }
 
 describe('streamText explicit abort races', () => {
-  it.fails('does not let a pending onAbort callback delay provider cancellation or outward stream closure', async () => {
+  it('does not let a pending onAbort callback delay provider cancellation or outward stream closure', async () => {
     const abortController = new AbortController();
     const abortReason = new DOMException('stop now', 'AbortError');
     const providerStarted = deferred<void>();
@@ -100,7 +100,7 @@ describe('streamText explicit abort races', () => {
     }
   });
 
-  it.fails('keeps abort as the single outward outcome when a provider error arrives immediately afterward', async () => {
+  it('keeps abort as the single outward outcome when a provider error arrives immediately afterward', async () => {
     const abortController = new AbortController();
     const abortReason = new DOMException('caller stopped', 'AbortError');
     const providerStarted = deferred<void>();
