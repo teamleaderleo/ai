@@ -101,6 +101,11 @@ jobs:
               + pre_registration_cancel
               + text[first_chunk_timeout_at:]
           )
+
+          unused_import = '  isAbortError,\n'
+          if text.count(unused_import) != 1:
+              raise SystemExit('isAbortError import anchor mismatch')
+          text = text.replace(unused_import, '', 1)
           source.write_text(text, encoding='utf-8')
 
           tests = Path(
