@@ -1,22 +1,22 @@
 name: Fieldwork explicit abort terminal repair
 
 on:
-  push:
+  pull_request:
     branches:
-      - fieldwork/explicit-abort-terminal-settlement-repair
+      - fieldwork/explicit-abort-terminal-settlement
     paths:
       - .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: fieldwork-explicit-abort-terminal-repair
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  repair-test-publish:
+  repair-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -25,7 +25,7 @@ jobs:
         with:
           ref: fieldwork/explicit-abort-terminal-settlement-repair
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Apply terminal-ordering repair
         shell: python
@@ -141,6 +141,8 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.33.4
 
       - name: Use Node.js 22
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -165,11 +167,10 @@ jobs:
             packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
           git diff --check
 
-      - name: Publish repaired source and tests only
+      - name: Record experiment receipt
         run: |
-          rm .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
-          git config user.name fieldwork-ci
-          git config user.email fieldwork-ci@users.noreply.github.com
-          git add packages/ai/src/generate-text .github
-          git commit -m 'fix(ai): make explicit abort terminal mechanics nonblocking'
-          git push origin HEAD:fieldwork/explicit-abort-terminal-settlement-repair
+          printf '%s\n' \
+            "base=$(git rev-parse HEAD)" \
+            "node=$(node --version)" \
+            "pnpm=$(pnpm --version)"
+          git diff --stat
