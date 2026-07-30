@@ -1,0 +1,54 @@
+name: Fieldwork format UI stream keep-alive tests
+
+on:
+  push:
+    branches:
+      - fieldwork/ui-message-stream-keepalive
+    paths:
+      - '.github/workflows/fieldwork-format-ui-stream-keepalive.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-format-ui-stream-keepalive
+  cancel-in-progress: false
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/ui-message-stream-keepalive
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Apply repository formatter
+        run: |
+          pnpm exec ultracite fix \
+            packages/ai/src/agent/create-agent-ui-stream-response-keep-alive.test.ts \
+            packages/ai/src/generate-text/stream-text-ui-response-keep-alive.test.ts
+          pnpm exec ultracite check
+      - name: Verify bounded diff
+        run: |
+          rm .github/workflows/fieldwork-format-ui-stream-keepalive.yml
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            .github/workflows/fieldwork-format-ui-stream-keepalive.yml \
+            packages/ai/src/agent/create-agent-ui-stream-response-keep-alive.test.ts \
+            packages/ai/src/generate-text/stream-text-ui-response-keep-alive.test.ts | sort)"
+      - name: Publish formatting-only head
+        run: |
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'test: format UI stream keep-alive coverage'
+          git push origin HEAD:fieldwork/ui-message-stream-keepalive
