@@ -51,7 +51,9 @@ jobs:
         working-directory: candidate
         env:
           EXPECTED_CANDIDATE_HEAD: 7c8b95b12e7a47e0f614ff949b645e546488eea7
-        run: pnpm exec tsx ../carrier/.fieldwork/ui-stream-keepalive-http-probe.mjs
+        run: >-
+          pnpm --dir packages/ai exec tsx
+          ../../../carrier/.fieldwork/ui-stream-keepalive-http-probe.mjs
 
       - name: Record exact receipt
         run: |
