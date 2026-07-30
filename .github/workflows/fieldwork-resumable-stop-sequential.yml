@@ -36,6 +36,8 @@ jobs:
           cache: pnpm
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build AI package and workspace dependencies
+        run: pnpm --filter ai... build
       - name: Execute sequential Stop-state cases
         run: pnpm exec vitest --run examples/next/util/chat-store.test.ts --environment node
       - name: Verify repository formatting for changed source
