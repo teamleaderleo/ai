@@ -40,12 +40,31 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build workspace AI package for example resolution
-        run: pnpm --filter ai build
+      - name: Create focused virtual AI module
+        run: |
+          cat > .fieldwork-ai-stub.ts <<'EOF'
+          export const generateId = () => 'generated-chat-id';
+          EOF
+          cat > .fieldwork-resumable-stop-vitest.config.ts <<'EOF'
+          import path from 'node:path';
+          import { fileURLToPath } from 'node:url';
+          import { defineConfig } from 'vitest/config';
+
+          const root = path.dirname(fileURLToPath(import.meta.url));
+
+          export default defineConfig({
+            resolve: {
+              alias: {
+                ai: path.join(root, '.fieldwork-ai-stub.ts'),
+              },
+            },
+          });
+          EOF
 
       - name: Run focused file-store regression
         run: >-
           pnpm exec vitest --run
+          --config .fieldwork-resumable-stop-vitest.config.ts
           examples/next/util/chat-store.test.ts
           --environment node
 
