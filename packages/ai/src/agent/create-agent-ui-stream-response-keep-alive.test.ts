@@ -53,7 +53,9 @@ describe('createAgentUIStreamResponse keepAliveMs', () => {
       ],
       keepAliveMs: 1000,
     });
-    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    const reader = response
+      .body!.pipeThrough(new TextDecoderStream())
+      .getReader();
 
     await expect(reader.read()).resolves.toEqual({
       done: false,

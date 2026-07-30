@@ -47,7 +47,9 @@ describe('streamText UI response keepAliveMs', () => {
     const response = createResult().toUIMessageStreamResponse({
       keepAliveMs: 1000,
     });
-    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    const reader = response
+      .body!.pipeThrough(new TextDecoderStream())
+      .getReader();
 
     await expect(reader.read()).resolves.toEqual({
       done: false,
