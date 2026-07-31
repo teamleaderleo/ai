@@ -9,7 +9,6 @@ import {
   createIdGenerator,
   DelayedPromise,
   filterNullable,
-  isAbortError,
   type Arrayable,
   type Context,
   type Experimental_SandboxSession as SandboxSession,
@@ -1184,6 +1183,12 @@ class DefaultStreamTextResult<
     > = createIdMap();
     let recordedNoOutputError: NoOutputGeneratedError | undefined;
 
+    const self = this;
+    const callId = generateCallId();
+    const getAbortReason = () =>
+      abortSignal?.reason ??
+      new DOMException('This operation was aborted', 'AbortError');
+
     const eventProcessor = new TransformStream<
       EnrichedStreamPart<TOOLS, InferPartialOutput<OUTPUT>>,
       EnrichedStreamPart<TOOLS, InferPartialOutput<OUTPUT>>
@@ -1403,6 +1408,11 @@ class DefaultStreamTextResult<
 
       async flush(controller) {
         try {
+          if (abortSignal?.aborted) {
+            self.rejectResultPromises(getAbortReason());
+            return;
+          }
+
           // reject when no output was generated or an incomplete model stream
           // ended a continuation step:
           if (recordedSteps.length === 0 || recordedNoOutputError != null) {
@@ -1501,61 +1511,118 @@ class DefaultStreamTextResult<
 
     // resilient stream that handles abort signals and errors:
     const reader = stitchableStream.stream.getReader();
-    let stream = new ReadableStream<TextStreamPart<TOOLS>>({
-      async start(controller) {
-        // send start event:
-        controller.enqueue({ type: 'start' });
-      },
+    let cleanupAbortListener: (() => void) | undefined;
+    let abortPromise: Promise<void> | undefined;
+    let streamClosed = false;
 
-      async pull(controller) {
-        // abort handling:
-        async function abort() {
-          await notify({
-            event: {
-              callId,
-              steps: recordedSteps,
-              ...(abortSignal?.reason !== undefined
-                ? { reason: abortSignal.reason }
-                : {}),
-            },
-            callbacks: [onAbort, telemetryDispatcher.onAbort],
-          });
+    const closeController = (
+      controller: ReadableStreamDefaultController<TextStreamPart<TOOLS>>,
+    ) => {
+      if (streamClosed) {
+        return;
+      }
+
+      streamClosed = true;
+      cleanupAbortListener?.();
+      controller.close();
+    };
+
+    const abort = (
+      controller: ReadableStreamDefaultController<TextStreamPart<TOOLS>>,
+    ) => {
+      if (abortPromise != null) {
+        return abortPromise;
+      }
+
+      abortPromise = (async () => {
+        const reason = getAbortReason();
+
+        self.rejectResultPromises(reason);
+
+        if (!streamClosed) {
           controller.enqueue({
             type: 'abort',
             // The `reason` is usually of type DOMException, but it can also be of any type,
             // so we use getErrorMessage for serialization because it is already designed to accept values of the unknown type.
             // See: https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/reason
-            ...(abortSignal?.reason !== undefined
-              ? { reason: getErrorMessage(abortSignal.reason) }
+            ...(reason !== undefined
+              ? { reason: getErrorMessage(reason) }
               : {}),
           });
-          controller.close();
+          closeController(controller);
         }
 
-        try {
-          const { done, value } = await reader.read();
+        void reader.cancel(reason).catch(() => {});
 
-          if (done) {
-            controller.close();
+        // Terminal mechanics are complete before observability.
+        void notify({
+          event: {
+            callId,
+            steps: recordedSteps,
+            ...(reason !== undefined ? { reason } : {}),
+          },
+          callbacks: [onAbort, telemetryDispatcher.onAbort],
+        });
+      })();
+
+      return abortPromise;
+    };
+
+    let stream = new ReadableStream<TextStreamPart<TOOLS>>({
+      async start(controller) {
+        // send start event:
+        controller.enqueue({ type: 'start' });
+
+        if (abortSignal != null) {
+          const abortHandler = () => {
+            void abort(controller);
+          };
+
+          abortSignal.addEventListener('abort', abortHandler, { once: true });
+          cleanupAbortListener = () => {
+            abortSignal.removeEventListener('abort', abortHandler);
+          };
+
+          if (abortSignal.aborted) {
+            void abort(controller);
+          }
+        }
+      },
+
+      async pull(controller) {
+        try {
+          if (abortSignal?.aborted) {
+            await abort(controller);
             return;
           }
 
-          if (abortSignal?.aborted) {
-            await abort();
+          const { done, value } = await reader.read();
+
+          if (abortPromise != null || abortSignal?.aborted) {
+            await abort(controller);
+            return;
+          }
+
+          if (done) {
+            closeController(controller);
             return;
           }
 
           controller.enqueue(value);
         } catch (error) {
-          if (isAbortError(error) && abortSignal?.aborted) {
-            await abort();
+          if (abortPromise != null || abortSignal?.aborted) {
+            await abort(controller);
           } else {
+            streamClosed = true;
+            cleanupAbortListener?.();
             controller.error(error);
           }
         }
       },
 
       cancel(reason) {
+        streamClosed = true;
+        cleanupAbortListener?.();
         return stitchableStream.stream.cancel(reason);
       },
     });
@@ -1597,10 +1664,6 @@ class DefaultStreamTextResult<
     });
 
     const callSettings = prepareLanguageModelCallOptions(settings);
-
-    const self = this;
-
-    const callId = generateCallId();
 
     (async () => {
       const initialPrompt = await standardizePrompt({
@@ -2079,6 +2142,15 @@ class DefaultStreamTextResult<
             ),
           );
 
+          // Abort may win after the provider created its stream but before
+          // the stream is registered with the stitchable owner. Cancel the
+          // still-unlocked provider stream directly in that gap.
+          if (abortSignal?.aborted) {
+            cleanupStepTimeouts();
+            await languageModelStream.cancel(getAbortReason());
+            return;
+          }
+
           startFirstChunkTimeout();
 
           const streamAfterToolCallbackInvocation =
@@ -2485,6 +2557,11 @@ class DefaultStreamTextResult<
         }),
       );
     })().catch(async error => {
+      if (abortSignal?.aborted) {
+        self.rejectResultPromises(getAbortReason());
+        return;
+      }
+
       await telemetryDispatcher.onError?.({ callId, error });
       self._initialResponseMessages.reject(error);
       markPromiseAsHandled(self._initialResponseMessages.promise);
