@@ -113,6 +113,33 @@ describe('createUIMessageStreamResponse keepAliveMs', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('repeatedly opens and cancels without leaking timers or cancellation work', async () => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      let resolveSourceCancelled!: () => void;
+      const sourceCancelled = new Promise<void>(resolve => {
+        resolveSourceCancelled = resolve;
+      });
+      const sourceCancel = vi.fn(() => {
+        resolveSourceCancelled();
+      });
+      const source = new ReadableStream<UIMessageChunk>({
+        cancel: sourceCancel,
+      });
+      const response = createUIMessageStreamResponse({
+        stream: source,
+        keepAliveMs: 1000,
+      });
+      const reader = decode(response).getReader();
+
+      await reader.read();
+      await reader.cancel(new Error(`client disconnected ${attempt}`));
+      await sourceCancelled;
+
+      expect(sourceCancel).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
   it('does not wait for an independent consumeSseStream branch when the client cancels', async () => {
     let persistenceStream!: ReadableStream<string>;
     const source = new ReadableStream<UIMessageChunk>();
