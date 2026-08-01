@@ -1,11 +1,9 @@
 name: Fieldwork unit 06 provider cancel settlement
 
 on:
-  pull_request:
+  push:
     branches:
-      - upstream/06-explicit-abort-nonblocking
-    paths:
-      - .github/workflows/fieldwork-explicit-abort-terminal-repair.yml
+      - fieldwork/06-explicit-abort-cancel-carrier
   workflow_dispatch:
 
 permissions:
