@@ -1,0 +1,209 @@
+name: Fieldwork unit 06 cancel settlement
+
+on:
+  push:
+    branches:
+      - upstream/06-explicit-abort-nonblocking
+    paths:
+      - .github/workflows/fieldwork-unit-06-cancel-settlement.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-unit-06-cancel-settlement-source
+  cancel-in-progress: true
+
+jobs:
+  repair-test-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out canonical source branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: upstream/06-explicit-abort-nonblocking
+          fetch-depth: 0
+
+      - name: Apply nonblocking direct-cancel repair and controls
+        shell: python
+        run: |
+          from pathlib import Path
+
+          source = Path('packages/ai/src/generate-text/stream-text.ts')
+          text = source.read_text(encoding='utf-8')
+          old = '''          // Abort may win after the provider created its stream but before
+          // the stream is registered with the stitchable owner. Cancel the
+          // still-unlocked provider stream directly in that gap.
+          if (abortSignal?.aborted) {
+            cleanupStepTimeouts();
+            await languageModelStream.cancel(getAbortReason());
+            return;
+          }
+'''
+          new = '''          // Abort may win after the provider created its stream but before
+          // the stream is registered with the stitchable owner. Request
+          // cancellation directly without joining provider cleanup, which may
+          // reject or remain pending indefinitely.
+          if (abortSignal?.aborted) {
+            cleanupStepTimeouts();
+            void languageModelStream.cancel(getAbortReason()).catch(() => {});
+            return;
+          }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('pre-registration cancellation anchor mismatch')
+          source.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          tests = Path(
+              'packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts'
+          )
+          test_text = tests.read_text(encoding='utf-8')
+          closing = '\n});\n'
+          if not test_text.endswith(closing):
+              raise SystemExit('test suite closing anchor mismatch')
+
+          additions = r'''
+
+  it('settles outward state when pre-registration provider cancellation stays pending', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('cancel remains pending', 'AbortError');
+    const cancelRequested = deferred<unknown>();
+    const pendingCancel = deferred<void>();
+    const onAbort = vi.fn();
+
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => {
+          const stream = new ReadableStream<LanguageModelV4StreamPart>({
+            cancel(reason) {
+              cancelRequested.resolve(reason);
+              return pendingCancel.promise;
+            },
+          });
+
+          // Fire after the provider stream exists but before streamText can
+          // register the standardized stream with its stitchable owner.
+          abortController.abort(abortReason);
+          return { stream };
+        },
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort,
+    });
+
+    const streamOutcomePromise = collectStream(result.stream);
+
+    expectAbortRejection(await settleWithin(result.steps), abortReason);
+    expect(await settleWithin(cancelRequested.promise)).toMatchObject({
+      status: 'resolved',
+      value: abortReason,
+    });
+    expect(await settleWithin(streamOutcomePromise)).toMatchObject({
+      status: 'resolved',
+    });
+    expect(await settleWithin(pendingCancel.promise, 25)).toMatchObject({
+      status: 'pending',
+    });
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it('contains a rejected pre-registration provider cancellation', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('cancel rejects', 'AbortError');
+    const cancelError = new Error('provider cancel failed');
+    const cancelRequested = deferred<unknown>();
+    const onAbort = vi.fn();
+    const onError = vi.fn();
+
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => {
+          const stream = new ReadableStream<LanguageModelV4StreamPart>({
+            cancel(reason) {
+              cancelRequested.resolve(reason);
+              return Promise.reject(cancelError);
+            },
+          });
+
+          abortController.abort(abortReason);
+          return { stream };
+        },
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort,
+      onError,
+    });
+
+    const streamOutcomePromise = collectStream(result.stream);
+
+    expectAbortRejection(await settleWithin(result.steps), abortReason);
+    expect(await settleWithin(cancelRequested.promise)).toMatchObject({
+      status: 'resolved',
+      value: abortReason,
+    });
+    expect(await settleWithin(streamOutcomePromise)).toMatchObject({
+      status: 'resolved',
+    });
+
+    // Allow the rejected cancellation promise to reach its attached handler.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+'''
+          tests.write_text(
+              test_text[:-len(closing)] + additions + closing,
+              encoding='utf-8',
+          )
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.33.4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the AI package dependency closure
+        run: pnpm turbo build --filter=ai...
+
+      - name: Run exact Node and Edge regressions
+        run: |
+          pnpm --dir packages/ai exec vitest \
+            --config vitest.node.config.js --run \
+            src/generate-text/stream-text-explicit-abort.test.ts \
+            src/generate-text/stream-text-explicit-abort-races.test.ts
+          pnpm --dir packages/ai exec vitest \
+            --config vitest.edge.config.js --run \
+            src/generate-text/stream-text-explicit-abort.test.ts \
+            src/generate-text/stream-text-explicit-abort-races.test.ts
+          pnpm --dir packages/ai type-check
+          pnpm exec ultracite check \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
+          git diff --check
+
+      - name: Publish tested source and retire carrier workflow
+        run: |
+          rm .github/workflows/fieldwork-unit-06-cancel-settlement.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(ai): make direct abort cancellation request-only'
+          git push origin HEAD:upstream/06-explicit-abort-nonblocking
+          printf '%s\n' \
+            "published=$(git rev-parse HEAD)" \
+            "node=$(node --version)" \
+            "pnpm=$(pnpm --version)"
