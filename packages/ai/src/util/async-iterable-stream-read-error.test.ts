@@ -66,6 +66,29 @@ describe.each(implementations)('$name read-error cleanup', ({ create }) => {
     reader.releaseLock();
   });
 
+  it('releases the reader when the source error reason is undefined', async () => {
+    let controller!: ReadableStreamDefaultController<string>;
+
+    const stream = create(
+      new ReadableStream<string>({
+        start(controllerParam) {
+          controller = controllerParam;
+        },
+      }),
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+    const failedRead = iterator.next();
+
+    controller.error(undefined);
+
+    await expect(failedRead).rejects.toBeUndefined();
+    expect(stream.locked).toBe(false);
+    expect(await iterator.next()).toEqual({
+      done: true,
+      value: undefined,
+    });
+  });
+
   it('settles concurrent pending reads with the original error and cleans up once', async () => {
     const sourceError = new Error('source failed');
     let controller!: ReadableStreamDefaultController<string>;
