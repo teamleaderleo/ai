@@ -49,7 +49,18 @@ export function isUrlSupported({
         return mediaType.startsWith(mediaTypePrefix);
       })
       .flatMap(({ regexes }) => regexes)
-      // check if any pattern matches the url:
-      .some(pattern => pattern.test(url))
+      // check if any pattern matches the url without retaining RegExp state:
+      .some(pattern => testRegExpStatelessly(pattern, url))
   );
+}
+
+function testRegExpStatelessly(pattern: RegExp, value: string): boolean {
+  const previousLastIndex = pattern.lastIndex;
+
+  try {
+    pattern.lastIndex = 0;
+    return pattern.test(value);
+  } finally {
+    pattern.lastIndex = previousLastIndex;
+  }
 }
