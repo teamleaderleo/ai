@@ -8,7 +8,7 @@ export type AsyncIterableStream<T> = AsyncIterable<T> & ReadableStream<T>;
  * Wraps a ReadableStream and returns an object that is both a ReadableStream and an AsyncIterable.
  * This enables consumption of the stream using for-await-of, with proper resource cleanup on early exit or error.
  *
- * @template T The type of the stream's chunks.
+ * @template T The type of values emitted by the streams.
  * @param source The source ReadableStream to wrap.
  * @returns An AsyncIterableStream that can be used as both a ReadableStream and an AsyncIterable.
  */
@@ -32,7 +32,7 @@ export function createAsyncIterableStream<T>(
  * Node.js 26). {@link createAsyncIterableStream} wraps this after adding a
  * fresh transform for callers that may pass shared or locked streams.
  *
- * @template T The type of the stream's chunks.
+ * @template T The type of values emitted by the streams.
  * @param stream The ReadableStream to augment. It must be fresh and unlocked.
  * @returns The same stream, augmented with the async iterator protocol.
  */
@@ -78,14 +78,19 @@ export function asAsyncIterableStream<T>(
           return { done: true, value: undefined };
         }
 
-        const { done, value } = await reader.read();
+        try {
+          const { done, value } = await reader.read();
 
-        if (done) {
-          await cleanup(true);
-          return { done: true, value: undefined };
+          if (done) {
+            await cleanup(true);
+            return { done: true, value: undefined };
+          }
+
+          return { done: false, value };
+        } catch (error) {
+          await cleanup(false);
+          throw error;
         }
-
-        return { done: false, value };
       },
 
       /**
