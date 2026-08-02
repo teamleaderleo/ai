@@ -87,6 +87,14 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
     }
   }
 
+  function safeOnError(error: unknown): string {
+    try {
+      return onError(error);
+    } catch {
+      return 'An error occurred.';
+    }
+  }
+
   try {
     const result = execute({
       writer: {
@@ -105,12 +113,12 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
             })().catch(error => {
               safeEnqueue({
                 type: 'error',
-                errorText: onError(error),
+                errorText: safeOnError(error),
               } as InferUIMessageChunk<UI_MESSAGE>);
             }),
           );
         },
-        onError,
+        onError: safeOnError,
       },
     });
 
@@ -119,7 +127,7 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
         result.catch(error => {
           safeEnqueue({
             type: 'error',
-            errorText: onError(error),
+            errorText: safeOnError(error),
           } as InferUIMessageChunk<UI_MESSAGE>);
         }),
       );
@@ -127,7 +135,7 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
   } catch (error) {
     safeEnqueue({
       type: 'error',
-      errorText: onError(error),
+      errorText: safeOnError(error),
     } as InferUIMessageChunk<UI_MESSAGE>);
   }
 
@@ -135,19 +143,26 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
   // streams even after execute has returned, as long as there is still an
   // open merged stream. This is important to e.g. forward new streams and
   // from callbacks.
-  const waitForStreams: Promise<void> = new Promise(async resolve => {
+  async function waitForStreams(): Promise<void> {
     while (ongoingStreamPromises.length > 0) {
       await ongoingStreamPromises.shift();
     }
-    resolve();
-  });
+  }
 
-  waitForStreams.finally(() => {
+  function closeStream() {
     try {
       controller.close();
     } catch {
       // suppress errors when the stream has been closed
     }
+  }
+
+  void waitForStreams().then(closeStream, error => {
+    safeEnqueue({
+      type: 'error',
+      errorText: safeOnError(error),
+    } as InferUIMessageChunk<UI_MESSAGE>);
+    closeStream();
   });
 
   return handleUIMessageStreamFinish<UI_MESSAGE>({
@@ -156,6 +171,6 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
     originalMessages,
     onStepEnd: onStepEnd ?? onStepFinish,
     onEnd: onEnd ?? onFinish,
-    onError,
+    onError: safeOnError,
   });
 }
