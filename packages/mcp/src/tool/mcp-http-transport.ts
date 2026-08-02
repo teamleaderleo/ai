@@ -596,8 +596,16 @@ export class HttpMCPTransport implements MCPTransport {
           this.onerror?.(error);
         } finally {
           if (this.inboundSseConnection === connection) {
+            const reconnect =
+              shouldReconnect && !this.abortController?.signal.aborted;
+            if (reconnect) {
+              // Release the ended reader now rather than retaining a stale
+              // connection until transport.close(). Cancellation failures remain
+              // observable through the existing connection close handler.
+              connection.close();
+            }
             this.inboundSseConnection = undefined;
-            if (shouldReconnect && !this.abortController?.signal.aborted) {
+            if (reconnect) {
               this.scheduleInboundSseReconnection();
             }
           }
