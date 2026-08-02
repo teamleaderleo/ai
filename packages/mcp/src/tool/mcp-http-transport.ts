@@ -40,6 +40,8 @@ export class HttpMCPTransport implements MCPTransport {
   private resourceMetadataUrl?: URL;
   private sessionId?: string;
   private inboundSseConnection?: { close: () => void };
+  private inboundSseConnectionPromise?: Promise<void>;
+  private inboundSseReconnectTimeout?: ReturnType<typeof setTimeout>;
   private redirectMode: RequestRedirect;
   private fetchFn: FetchFunction;
   private authPromise?: Promise<AuthResult>;
@@ -190,6 +192,10 @@ export class HttpMCPTransport implements MCPTransport {
   }
 
   async close(options?: { signal?: AbortSignal }): Promise<void> {
+    if (this.inboundSseReconnectTimeout) {
+      clearTimeout(this.inboundSseReconnectTimeout);
+      this.inboundSseReconnectTimeout = undefined;
+    }
     this.inboundSseConnection?.close();
     this.abortController?.abort();
 
@@ -417,6 +423,10 @@ export class HttpMCPTransport implements MCPTransport {
   }
 
   private scheduleInboundSseReconnection(): void {
+    if (this.inboundSseReconnectTimeout) {
+      return;
+    }
+
     const { maxRetries } = this.reconnectionOptions;
     if (maxRetries > 0 && this.inboundReconnectAttempts >= maxRetries) {
       this.onerror?.(
@@ -428,9 +438,10 @@ export class HttpMCPTransport implements MCPTransport {
     }
 
     const delay = this.getNextReconnectionDelay(this.inboundReconnectAttempts);
-    this.inboundReconnectAttempts += 1;
-    setTimeout(() => {
+    this.inboundSseReconnectTimeout = setTimeout(() => {
+      this.inboundSseReconnectTimeout = undefined;
       if (this.abortController?.signal.aborted) return;
+      this.inboundReconnectAttempts += 1;
       this.startInboundSse(false, this.lastInboundEventId);
     }, delay);
   }
@@ -439,12 +450,29 @@ export class HttpMCPTransport implements MCPTransport {
     triedAuth: boolean = false,
     resumeToken?: string,
   ): void {
-    void this.openInboundSse(triedAuth, resumeToken).catch(error => {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return;
-      }
-      this.onerror?.(error);
-    });
+    if (this.inboundSseReconnectTimeout) {
+      clearTimeout(this.inboundSseReconnectTimeout);
+      this.inboundSseReconnectTimeout = undefined;
+    }
+
+    if (this.inboundSseConnection || this.inboundSseConnectionPromise) {
+      return;
+    }
+
+    const connectionPromise = this.openInboundSse(triedAuth, resumeToken);
+    this.inboundSseConnectionPromise = connectionPromise;
+    void connectionPromise
+      .catch(error => {
+        if (error instanceof Error && error.name === 'AbortError') {
+          return;
+        }
+        this.onerror?.(error);
+      })
+      .finally(() => {
+        if (this.inboundSseConnectionPromise === connectionPromise) {
+          this.inboundSseConnectionPromise = undefined;
+        }
+      });
   }
 
   // Open optional inbound SSE stream; best-effort and resumable
@@ -511,11 +539,32 @@ export class HttpMCPTransport implements MCPTransport {
         .pipeThrough(new EventSourceParserStream());
       const reader = stream.getReader();
 
+      let shouldReconnect = false;
+      const connection = {
+        close: () => {
+          void reader.cancel().catch(error => {
+            if (error instanceof Error && error.name === 'AbortError') {
+              return;
+            }
+            this.onerror?.(error);
+          });
+        },
+      };
+
       const processEvents = async () => {
         try {
           while (true) {
             const { done, value } = await reader.read();
-            if (done) return;
+            if (done) {
+              shouldReconnect = true;
+              return;
+            }
+
+            // Receiving an event proves that the connection is usable. Reset the
+            // retry budget here rather than when the HTTP response opens so an
+            // immediately closing stream cannot reconnect forever.
+            this.inboundReconnectAttempts = 0;
+
             const { event, data, id } = value as {
               event?: string;
               data: string;
@@ -543,32 +592,24 @@ export class HttpMCPTransport implements MCPTransport {
           if (error instanceof Error && error.name === 'AbortError') {
             return;
           }
+          shouldReconnect = true;
           this.onerror?.(error);
-          if (!this.abortController?.signal.aborted) {
-            this.scheduleInboundSseReconnection();
+        } finally {
+          if (this.inboundSseConnection === connection) {
+            this.inboundSseConnection = undefined;
+            if (shouldReconnect && !this.abortController?.signal.aborted) {
+              this.scheduleInboundSseReconnection();
+            }
           }
         }
       };
 
-      this.inboundSseConnection = {
-        close: () => {
-          void reader.cancel().catch(error => {
-            if (error instanceof Error && error.name === 'AbortError') {
-              return;
-            }
-            this.onerror?.(error);
-          });
-        },
-      };
-      this.inboundReconnectAttempts = 0;
+      this.inboundSseConnection = connection;
       void processEvents().catch(error => {
         if (error instanceof Error && error.name === 'AbortError') {
           return;
         }
         this.onerror?.(error);
-        if (!this.abortController?.signal.aborted) {
-          this.scheduleInboundSseReconnection();
-        }
       });
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
