@@ -113,6 +113,7 @@ export { validateBaseURL } from './validate-base-url';
 export { validateDownloadUrl } from './validate-download-url';
 export * from './validate-types';
 export { VERSION } from './version';
+export { withPollingDeadline } from './with-polling-deadline';
 export {
   getWebSocketConstructor,
   readWebSocketMessageText,
