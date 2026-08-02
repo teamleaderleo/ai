@@ -13,7 +13,7 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: 147e4066f69451e69aab26cbf47a7d273bbc6427
+          ref: be190b928918eb75bf550cc8e92305f57b126392
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
@@ -43,4 +43,4 @@ jobs:
         run: pnpm exec ultracite check packages/ai/src/util/async-iterable-stream.ts packages/ai/src/util/async-iterable-stream-read-error.test.ts
 
       - name: Check candidate diff
-        run: git diff --check 3bc0d4f40df7a77af4b181bc97dc1c54843545ab...147e4066f69451e69aab26cbf47a7d273bbc6427
+        run: git diff --check 3bc0d4f40df7a77af4b181bc97dc1c54843545ab...be190b928918eb75bf550cc8e92305f57b126392
