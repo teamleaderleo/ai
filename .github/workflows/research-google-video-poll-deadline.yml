@@ -1,0 +1,30 @@
+name: Research video poll deadlines
+
+on:
+  push:
+    branches:
+      - research/google-video-poll-deadline
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Run legacy-loop deadline regression
+        working-directory: packages/google
+        run: pnpm exec vitest --config vitest.node.config.js --run src/google-video-poll-deadline.test.ts
+      - name: Run slow-status deadline regression
+        working-directory: packages/xai
+        run: pnpm exec vitest --config vitest.node.config.js --run src/xai-video-poll-deadline.test.ts
