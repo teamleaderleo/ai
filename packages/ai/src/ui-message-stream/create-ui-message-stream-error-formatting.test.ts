@@ -9,7 +9,7 @@ const throwingOnError = () => {
 
 async function readWithTimeout<T>(
   stream: ReadableStream<T>,
-  timeoutMs = 250,
+  timeoutMs = 1000,
 ): Promise<T[]> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
