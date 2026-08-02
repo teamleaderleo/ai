@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { asAsyncIterableStream } from './async-iterable-stream';
+import {
+  asAsyncIterableStream,
+  createAsyncIterableStream,
+} from './async-iterable-stream';
 
 describe('asAsyncIterableStream() source errors', () => {
   it('releases the reader lock and preserves the source error', async () => {
@@ -50,6 +53,29 @@ describe('asAsyncIterableStream() source errors', () => {
       done: false,
       value: 'chunk',
     });
+    expect(stream.locked).toBe(true);
+
+    controller.error(sourceError);
+
+    await expect(iterator.next()).rejects.toBe(sourceError);
+    expect(stream.locked).toBe(false);
+  });
+});
+
+describe('createAsyncIterableStream() source errors', () => {
+  it('releases the wrapped stream lock and preserves the source error', async () => {
+    const sourceError = new Error('wrapped source failed');
+    let controller: ReadableStreamDefaultController<string>;
+
+    const stream = createAsyncIterableStream(
+      new ReadableStream<string>({
+        start(value) {
+          controller = value;
+        },
+      }),
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+
     expect(stream.locked).toBe(true);
 
     controller.error(sourceError);
