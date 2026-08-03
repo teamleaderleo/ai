@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { readResponseWithSizeLimit } from './read-response-with-size-limit';
+import { describe, expect, it, vi } from 'vitest';
 import { DownloadError } from './download-error';
+import { readResponseWithSizeLimit } from './read-response-with-size-limit';
 
 function createMockResponse({
   body,
@@ -40,6 +40,20 @@ function createMockResponse({
     } as unknown as Response,
     cancelled: () => cancelled,
   };
+}
+
+function createResponseWithReader(
+  reader: Pick<
+    ReadableStreamDefaultReader<Uint8Array>,
+    'read' | 'cancel' | 'releaseLock'
+  >,
+): Response {
+  return {
+    headers: new Headers(),
+    body: {
+      getReader: () => reader,
+    },
+  } as unknown as Response;
 }
 
 describe('readResponseWithSizeLimit', () => {
@@ -119,6 +133,82 @@ describe('readResponseWithSizeLimit', () => {
       );
       return true;
     });
+  });
+
+  it('should preserve the size error when reader cancellation rejects', async () => {
+    const cancelError = new Error('cancel failed');
+    const releaseLock = vi.fn();
+    const reader = {
+      read: vi.fn().mockResolvedValue({
+        done: false,
+        value: new Uint8Array([1, 2]),
+      }),
+      cancel: vi.fn().mockRejectedValue(cancelError),
+      releaseLock,
+    };
+    const response = createResponseWithReader(reader);
+
+    await expect(
+      readResponseWithSizeLimit({
+        response,
+        url: 'http://example.com/streaming',
+        maxBytes: 1,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(DownloadError.isInstance(error)).toBe(true);
+      expect(error).not.toBe(cancelError);
+      return true;
+    });
+
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should preserve a read error when reader cancellation rejects', async () => {
+    const readError = new Error('read failed');
+    const releaseLock = vi.fn();
+    const reader = {
+      read: vi.fn().mockRejectedValue(readError),
+      cancel: vi.fn().mockRejectedValue(new Error('cancel failed')),
+      releaseLock,
+    };
+    const response = createResponseWithReader(reader);
+
+    await expect(
+      readResponseWithSizeLimit({
+        response,
+        url: 'http://example.com/read-error',
+        maxBytes: 100,
+      }),
+    ).rejects.toBe(readError);
+
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should preserve a successful read when reader cancellation rejects', async () => {
+    const data = new Uint8Array([1, 2]);
+    const releaseLock = vi.fn();
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({ done: false, value: data })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+      cancel: vi.fn().mockRejectedValue(new Error('cancel failed')),
+      releaseLock,
+    };
+    const response = createResponseWithReader(reader);
+
+    await expect(
+      readResponseWithSizeLimit({
+        response,
+        url: 'http://example.com/success',
+        maxBytes: 100,
+      }),
+    ).resolves.toEqual(data);
+
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it('should handle lying Content-Length (says small, sends large)', async () => {
