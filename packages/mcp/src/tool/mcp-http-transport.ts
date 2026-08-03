@@ -42,6 +42,7 @@ export class HttpMCPTransport implements MCPTransport {
   private inboundSseConnection?: { close: () => void };
   private inboundSseConnectionPromise?: Promise<void>;
   private inboundSseReconnectTimeout?: ReturnType<typeof setTimeout>;
+  private inboundSseRetryMs?: number;
   private redirectMode: RequestRedirect;
   private fetchFn: FetchFunction;
   private authPromise?: Promise<AuthResult>;
@@ -51,7 +52,6 @@ export class HttpMCPTransport implements MCPTransport {
 
   // Inbound SSE resumption and reconnection state
   private lastInboundEventId?: string;
-  private inboundReconnectAttempts = 0;
   private readonly reconnectionOptions = {
     initialReconnectionDelay: 1000,
     maxReconnectionDelay: 30000,
@@ -411,6 +411,10 @@ export class HttpMCPTransport implements MCPTransport {
   }
 
   private getNextReconnectionDelay(attempt: number): number {
+    if (this.inboundSseRetryMs !== undefined) {
+      return this.inboundSseRetryMs;
+    }
+
     const {
       initialReconnectionDelay,
       reconnectionDelayGrowFactor,
@@ -422,13 +426,13 @@ export class HttpMCPTransport implements MCPTransport {
     );
   }
 
-  private scheduleInboundSseReconnection(): void {
+  private scheduleInboundSseReconnection(attempt: number = 0): void {
     if (this.inboundSseReconnectTimeout) {
       return;
     }
 
     const { maxRetries } = this.reconnectionOptions;
-    if (maxRetries > 0 && this.inboundReconnectAttempts >= maxRetries) {
+    if (attempt >= maxRetries) {
       this.onerror?.(
         new MCPClientError({
           message: `MCP HTTP Transport Error: Maximum reconnection attempts (${maxRetries}) exceeded.`,
@@ -437,18 +441,18 @@ export class HttpMCPTransport implements MCPTransport {
       return;
     }
 
-    const delay = this.getNextReconnectionDelay(this.inboundReconnectAttempts);
+    const delay = this.getNextReconnectionDelay(attempt);
     this.inboundSseReconnectTimeout = setTimeout(() => {
       this.inboundSseReconnectTimeout = undefined;
       if (this.abortController?.signal.aborted) return;
-      this.inboundReconnectAttempts += 1;
-      this.startInboundSse(false, this.lastInboundEventId);
+      this.startInboundSse(false, this.lastInboundEventId, attempt + 1);
     }, delay);
   }
 
   private startInboundSse(
     triedAuth: boolean = false,
     resumeToken?: string,
+    reconnectionAttempt: number = 0,
   ): void {
     if (this.inboundSseReconnectTimeout) {
       clearTimeout(this.inboundSseReconnectTimeout);
@@ -467,6 +471,9 @@ export class HttpMCPTransport implements MCPTransport {
           return;
         }
         this.onerror?.(error);
+        if (!this.abortController?.signal.aborted) {
+          this.scheduleInboundSseReconnection(reconnectionAttempt);
+        }
       })
       .finally(() => {
         if (this.inboundSseConnectionPromise === connectionPromise) {
@@ -536,10 +543,17 @@ export class HttpMCPTransport implements MCPTransport {
 
       const stream = response.body
         .pipeThrough(new TextDecoderStream())
-        .pipeThrough(new EventSourceParserStream());
+        .pipeThrough(
+          new EventSourceParserStream({
+            onRetry: retryMs => {
+              this.inboundSseRetryMs = retryMs;
+            },
+          }),
+        );
       const reader = stream.getReader();
 
       let shouldReconnect = false;
+      let shouldCancelReader = false;
       const connection = {
         close: () => {
           void reader.cancel().catch(error => {
@@ -559,11 +573,6 @@ export class HttpMCPTransport implements MCPTransport {
               shouldReconnect = true;
               return;
             }
-
-            // Receiving an event proves that the connection is usable. Reset the
-            // retry budget here rather than when the HTTP response opens so an
-            // immediately closing stream cannot reconnect forever.
-            this.inboundReconnectAttempts = 0;
 
             const { event, data, id } = value as {
               event?: string;
@@ -593,19 +602,23 @@ export class HttpMCPTransport implements MCPTransport {
             return;
           }
           shouldReconnect = true;
+          shouldCancelReader = true;
           this.onerror?.(error);
         } finally {
           if (this.inboundSseConnection === connection) {
             const reconnect =
               shouldReconnect && !this.abortController?.signal.aborted;
-            if (reconnect) {
-              // Release the ended reader now rather than retaining a stale
+            if (shouldCancelReader) {
+              // Release an errored reader now rather than retaining a stale
               // connection until transport.close(). Cancellation failures remain
               // observable through the existing connection close handler.
               connection.close();
             }
             this.inboundSseConnection = undefined;
             if (reconnect) {
+              // A successfully opened stream starts a fresh sequence of failed
+              // reopen attempts. This allows protocol polling to continue across
+              // repeated clean server closures.
               this.scheduleInboundSseReconnection();
             }
           }
@@ -623,10 +636,7 @@ export class HttpMCPTransport implements MCPTransport {
       if (error instanceof Error && error.name === 'AbortError') {
         return;
       }
-      this.onerror?.(error);
-      if (!this.abortController?.signal.aborted) {
-        this.scheduleInboundSseReconnection();
-      }
+      throw error;
     }
   }
 }
