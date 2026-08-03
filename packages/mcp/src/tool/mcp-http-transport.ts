@@ -43,6 +43,11 @@ export class HttpMCPTransport implements MCPTransport {
   private inboundSseConnectionPromise?: Promise<void>;
   private inboundSseReconnectTimeout?: ReturnType<typeof setTimeout>;
   private inboundSseRetryMs?: number;
+  private pendingInboundSseStart?: {
+    triedAuth: boolean;
+    resumeToken?: string;
+    reconnectionAttempt: number;
+  };
   private redirectMode: RequestRedirect;
   private fetchFn: FetchFunction;
   private authPromise?: Promise<AuthResult>;
@@ -196,6 +201,7 @@ export class HttpMCPTransport implements MCPTransport {
       clearTimeout(this.inboundSseReconnectTimeout);
       this.inboundSseReconnectTimeout = undefined;
     }
+    this.pendingInboundSseStart = undefined;
     this.inboundSseConnection?.close();
     this.abortController?.abort();
 
@@ -454,7 +460,19 @@ export class HttpMCPTransport implements MCPTransport {
     resumeToken?: string,
     reconnectionAttempt: number = 0,
   ): void {
-    if (this.inboundSseConnection || this.inboundSseConnectionPromise) {
+    if (this.inboundSseConnection) {
+      return;
+    }
+
+    if (this.inboundSseConnectionPromise) {
+      // Coalesce a restart requested while the current connection attempt is
+      // settling. The owner promise replays it only if no stream or retry timer
+      // took ownership in the meantime.
+      this.pendingInboundSseStart = {
+        triedAuth,
+        resumeToken,
+        reconnectionAttempt,
+      };
       return;
     }
 
@@ -476,8 +494,25 @@ export class HttpMCPTransport implements MCPTransport {
         }
       })
       .finally(() => {
-        if (this.inboundSseConnectionPromise === connectionPromise) {
-          this.inboundSseConnectionPromise = undefined;
+        if (this.inboundSseConnectionPromise !== connectionPromise) {
+          return;
+        }
+
+        this.inboundSseConnectionPromise = undefined;
+        const pendingStart = this.pendingInboundSseStart;
+        this.pendingInboundSseStart = undefined;
+
+        if (
+          pendingStart &&
+          !this.inboundSseConnection &&
+          !this.inboundSseReconnectTimeout &&
+          !this.abortController?.signal.aborted
+        ) {
+          this.startInboundSse(
+            pendingStart.triedAuth,
+            pendingStart.resumeToken,
+            pendingStart.reconnectionAttempt,
+          );
         }
       });
   }
