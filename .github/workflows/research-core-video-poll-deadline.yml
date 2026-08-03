@@ -1,0 +1,27 @@
+name: Research core video poll deadline
+
+on:
+  pull_request:
+    branches:
+      - research/core-video-poll-deadline
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Run core polling deadline characterization
+        working-directory: packages/ai
+        run: pnpm exec vitest --config vitest.node.config.js --run src/generate-video/core-poll-deadline-authority.test.ts
