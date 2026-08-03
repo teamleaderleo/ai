@@ -73,6 +73,44 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
     }
   });
 
+  it('preserves a scheduled reconnect while connection finalization is pending', async () => {
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(null, { status: init?.method === 'GET' ? 405 : 202 }),
+    );
+    const transport = new HttpMCPTransport({
+      url: 'http://localhost:4000/mcp',
+      fetch,
+    });
+    const lifecycle = transport as unknown as {
+      inboundSseConnectionPromise?: Promise<void>;
+      inboundSseReconnectTimeout?: ReturnType<typeof setTimeout>;
+      startInboundSse: () => void;
+    };
+
+    await transport.start();
+    await flushMicrotasks();
+
+    let finishFinalization!: () => void;
+    lifecycle.inboundSseConnectionPromise = new Promise<void>(resolve => {
+      finishFinalization = resolve;
+    });
+    const reconnectTimeout = setTimeout(() => {}, 1000);
+    lifecycle.inboundSseReconnectTimeout = reconnectTimeout;
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    try {
+      lifecycle.startInboundSse();
+
+      expect(clearTimeoutSpy).not.toHaveBeenCalledWith(reconnectTimeout);
+      expect(lifecycle.inboundSseReconnectTimeout).toBe(reconnectTimeout);
+    } finally {
+      finishFinalization();
+      lifecycle.inboundSseConnectionPromise = undefined;
+      await transport.close();
+    }
+  });
+
   it('allows a 202 response to replace a cleanly ended inbound GET', async () => {
     let getCalls = 0;
     let markFirstReaderPull!: () => void;
