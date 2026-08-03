@@ -73,7 +73,7 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
     }
   });
 
-  it('allows a replacement inbound GET after the previous stream reaches clean EOF', async () => {
+  it('allows a 202 response to replace a cleanly ended inbound GET', async () => {
     let getCalls = 0;
     let markFirstReaderPull!: () => void;
     const firstReaderPull = new Promise<void>(resolve => {
@@ -120,22 +120,44 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
       await flushMicrotasks();
 
       expect(getCalls).toBe(2);
+
+      // The explicit restart owns the channel and cancels the pending automatic
+      // reconnect, so no third GET appears later.
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(getCalls).toBe(2);
     } finally {
       await transport.close();
     }
   });
 
-  it('bounds automatic reconnects when inbound streams immediately reach clean EOF', async () => {
+  it('respects the SSE retry field and resumes with Last-Event-ID', async () => {
     let getCalls = 0;
-    const errors: unknown[] = [];
+    const getHeaders: Array<Record<string, string>> = [];
 
     const fetch = vi.fn(
       async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (init?.method === 'GET') {
-          getCalls += 1;
+        if (init?.method !== 'GET') {
+          return new Response(null, { status: 202 });
+        }
+
+        getCalls += 1;
+        getHeaders.push(init.headers as Record<string, string>);
+
+        if (getCalls === 1) {
           return new Response(
             new ReadableStream({
               start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    [
+                      'id: cursor-1',
+                      'retry: 4321',
+                      'data: {"jsonrpc":"2.0","method":"notifications/test"}',
+                      '',
+                      '',
+                    ].join('\n'),
+                  ),
+                );
                 controller.close();
               },
             }),
@@ -143,7 +165,55 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
           );
         }
 
-        return new Response(null, { status: 202 });
+        return new Response(null, { status: 405 });
+      },
+    );
+
+    const transport = new HttpMCPTransport({
+      url: 'http://localhost:4000/mcp',
+      fetch,
+    });
+
+    try {
+      await transport.start();
+      await flushMicrotasks();
+      expect(getCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4320);
+      expect(getCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+      expect(getCalls).toBe(2);
+      expect(getHeaders[1]['last-event-id']).toBe('cursor-1');
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it('continues polling after more than two successful clean closures', async () => {
+    let getCalls = 0;
+    const errors: unknown[] = [];
+
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method !== 'GET') {
+          return new Response(null, { status: 202 });
+        }
+
+        getCalls += 1;
+        if (getCalls >= 4) {
+          return new Response(null, { status: 405 });
+        }
+
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
       },
     );
 
@@ -160,15 +230,69 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
       await flushMicrotasks();
       expect(getCalls).toBe(1);
 
+      for (let expectedCalls = 2; expectedCalls <= 4; expectedCalls += 1) {
+        await vi.advanceTimersByTimeAsync(1000);
+        await flushMicrotasks();
+        expect(getCalls).toBe(expectedCalls);
+      }
+
+      expect(errors).toHaveLength(0);
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it('bounds consecutive failed reopen attempts', async () => {
+    let getCalls = 0;
+    const errors: unknown[] = [];
+    const networkError = new TypeError('network down');
+
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method !== 'GET') {
+          return new Response(null, { status: 202 });
+        }
+
+        getCalls += 1;
+        if (getCalls === 1) {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.close();
+              },
+            }),
+            { headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+
+        throw networkError;
+      },
+    );
+
+    const transport = new HttpMCPTransport({
+      url: 'http://localhost:4000/mcp',
+      fetch,
+    });
+    transport.onerror = error => {
+      errors.push(error);
+    };
+
+    try {
+      await transport.start();
+      await flushMicrotasks();
+
       await vi.advanceTimersByTimeAsync(1000);
       await flushMicrotasks();
       expect(getCalls).toBe(2);
 
-      await vi.advanceTimersByTimeAsync(1500);
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(getCalls).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(1);
       await flushMicrotasks();
       expect(getCalls).toBe(3);
-      expect(errors).toHaveLength(1);
-      expect(errors[0]).toMatchObject({
+      expect(errors.filter(error => error === networkError)).toHaveLength(2);
+      expect(errors.at(-1)).toMatchObject({
         message:
           'MCP HTTP Transport Error: Maximum reconnection attempts (2) exceeded.',
       });
@@ -218,72 +342,5 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
 
     await vi.advanceTimersByTimeAsync(30000);
     expect(getCalls).toBe(1);
-  });
-
-  it('resets the reconnect budget after receiving an inbound event', async () => {
-    let getCalls = 0;
-    const errors: unknown[] = [];
-
-    const fetch = vi.fn(
-      async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (init?.method !== 'GET') {
-          return new Response(null, { status: 202 });
-        }
-
-        getCalls += 1;
-        if (getCalls === 2) {
-          return new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    'data: {"jsonrpc":"2.0","method":"notifications/test"}\n\n',
-                  ),
-                );
-                controller.close();
-              },
-            }),
-            { headers: { 'content-type': 'text/event-stream' } },
-          );
-        }
-
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.close();
-            },
-          }),
-          { headers: { 'content-type': 'text/event-stream' } },
-        );
-      },
-    );
-
-    const transport = new HttpMCPTransport({
-      url: 'http://localhost:4000/mcp',
-      fetch,
-    });
-    transport.onerror = error => {
-      errors.push(error);
-    };
-
-    try {
-      await transport.start();
-      await flushMicrotasks();
-
-      await vi.advanceTimersByTimeAsync(1000);
-      await flushMicrotasks();
-      expect(getCalls).toBe(2);
-
-      // The second connection delivered an event before closing, so its next
-      // retry uses the initial delay again instead of the grown 1500 ms delay.
-      await vi.advanceTimersByTimeAsync(999);
-      expect(getCalls).toBe(2);
-      await vi.advanceTimersByTimeAsync(1);
-      await flushMicrotasks();
-      expect(getCalls).toBe(3);
-      expect(errors).toHaveLength(0);
-    } finally {
-      await transport.close();
-    }
   });
 });
