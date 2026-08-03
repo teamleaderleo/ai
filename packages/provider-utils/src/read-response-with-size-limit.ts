@@ -84,6 +84,9 @@ export async function readResponseWithSizeLimit({
   } finally {
     try {
       await reader.cancel();
+    } catch {
+      // Cleanup failures must not replace a size-limit or read error, nor turn
+      // an otherwise successful read into a rejection.
     } finally {
       reader.releaseLock();
     }
