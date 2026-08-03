@@ -454,13 +454,13 @@ export class HttpMCPTransport implements MCPTransport {
     resumeToken?: string,
     reconnectionAttempt: number = 0,
   ): void {
+    if (this.inboundSseConnection || this.inboundSseConnectionPromise) {
+      return;
+    }
+
     if (this.inboundSseReconnectTimeout) {
       clearTimeout(this.inboundSseReconnectTimeout);
       this.inboundSseReconnectTimeout = undefined;
-    }
-
-    if (this.inboundSseConnection || this.inboundSseConnectionPromise) {
-      return;
     }
 
     const connectionPromise = this.openInboundSse(triedAuth, resumeToken);
