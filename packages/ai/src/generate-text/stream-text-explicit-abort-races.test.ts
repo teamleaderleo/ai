@@ -50,6 +50,23 @@ function expectAbortRejection(
   }
 }
 
+function expectSingleAbortPart(
+  outcome: Awaited<ReturnType<typeof collectStream>>,
+) {
+  expect(outcome.status).toBe('resolved');
+  if (outcome.status === 'resolved') {
+    expect(
+      outcome.parts.filter(
+        part =>
+          typeof part === 'object' &&
+          part != null &&
+          'type' in part &&
+          part.type === 'abort',
+      ),
+    ).toHaveLength(1);
+  }
+}
+
 describe('streamText explicit abort races', () => {
   it('does not let a pending onAbort callback delay provider cancellation or outward stream closure', async () => {
     const abortController = new AbortController();
@@ -83,11 +100,7 @@ describe('streamText explicit abort races', () => {
     abortController.abort(abortReason);
 
     try {
-      // Result settlement should not depend on callback completion.
       expectAbortRejection(await settleWithin(result.steps, 50), abortReason);
-
-      // Desired contract: provider cancellation and outward closure are terminal
-      // mechanics and therefore must not wait for an observability callback.
       expect(await settleWithin(providerCancelled.promise, 50)).toMatchObject({
         status: 'resolved',
       });
@@ -133,28 +146,88 @@ describe('streamText explicit abort races', () => {
 
     await providerStarted.promise;
     abortController.abort(abortReason);
-
-    // Abort listeners run synchronously until their first await. Triggering the
-    // provider error here deterministically exercises the competing pull path.
     providerController?.error(providerError);
 
     expectAbortRejection(await settleWithin(result.steps), abortReason);
-
-    const streamOutcome = await streamOutcomePromise;
-    expect(streamOutcome.status).toBe('resolved');
-    if (streamOutcome.status === 'resolved') {
-      expect(
-        streamOutcome.parts.filter(
-          part =>
-            typeof part === 'object' &&
-            part != null &&
-            'type' in part &&
-            part.type === 'abort',
-        ),
-      ).toHaveLength(1);
-    }
+    expectSingleAbortPart(await streamOutcomePromise);
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('keeps provider cancel rejection internal when abort wins before stream registration', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('pre-registration stop', 'AbortError');
+    const cancelError = new Error('provider cancel failed');
+    const providerCancel = vi.fn(() => Promise.reject(cancelError));
+    const onAbort = vi.fn();
+    const onError = vi.fn();
+
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => {
+          const stream = new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+            },
+            cancel: providerCancel,
+          });
+          abortController.abort(abortReason);
+          return { stream };
+        },
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort,
+      onError,
+    });
+
+    const streamOutcomePromise = collectStream(result.stream);
+
+    expectAbortRejection(await settleWithin(result.steps), abortReason);
+    expectSingleAbortPart(await streamOutcomePromise);
+    await vi.waitFor(() => expect(providerCancel).toHaveBeenCalledTimes(1));
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('settles public abort results while pre-registration provider cancellation is pending', async () => {
+    const abortController = new AbortController();
+    const abortReason = new DOMException('pending provider cancel', 'AbortError');
+    const releaseProviderCancel = deferred<void>();
+    const providerCancel = vi.fn(() => releaseProviderCancel.promise);
+    const onAbort = vi.fn();
+
+    const result = streamText({
+      model: new MockLanguageModelV4({
+        doStream: async () => {
+          const stream = new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+            },
+            cancel: providerCancel,
+          });
+          abortController.abort(abortReason);
+          return { stream };
+        },
+      }),
+      prompt: 'test-input',
+      abortSignal: abortController.signal,
+      onAbort,
+    });
+
+    const streamOutcomePromise = collectStream(result.stream);
+
+    try {
+      expectAbortRejection(await settleWithin(result.steps, 50), abortReason);
+      expect(await settleWithin(streamOutcomePromise, 50)).toMatchObject({
+        status: 'resolved',
+      });
+      await vi.waitFor(() => expect(providerCancel).toHaveBeenCalledTimes(1));
+      expect(onAbort).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseProviderCancel.resolve();
+      await streamOutcomePromise;
+    }
   });
 
   it('emits one abort outcome to each active consumer while invoking onAbort once', async () => {
@@ -191,18 +264,7 @@ describe('streamText explicit abort races', () => {
     expectAbortRejection(await stepsOutcomePromise, abortReason);
 
     for (const outcome of await Promise.all([firstConsumer, secondConsumer])) {
-      expect(outcome.status).toBe('resolved');
-      if (outcome.status === 'resolved') {
-        expect(
-          outcome.parts.filter(
-            part =>
-              typeof part === 'object' &&
-              part != null &&
-              'type' in part &&
-              part.type === 'abort',
-          ),
-        ).toHaveLength(1);
-      }
+      expectSingleAbortPart(outcome);
     }
 
     expect(onAbort).toHaveBeenCalledTimes(1);
