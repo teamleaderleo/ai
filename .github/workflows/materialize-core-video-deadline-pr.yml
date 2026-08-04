@@ -1,0 +1,75 @@
+name: Materialize core video deadline candidate
+
+on:
+  pull_request:
+    branches:
+      - research/base-main-06fd
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      github.event.pull_request.head.ref == 'fix/core-video-operation-deadline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/core-video-operation-deadline
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Materialize candidate
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          workflow = Path(
+              '.github/workflows/build-core-video-operation-deadline.yml'
+          ).read_text()
+          start_marker = "          python <<'PY'\n"
+          end_marker = "          PY\n"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = workflow[start:end]
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in script.splitlines()
+          )
+          exec(compile(script, '<materialize-core-video-deadline>', 'exec'))
+          PY
+      - name: Format candidate
+        run: |
+          pnpm exec oxfmt \
+            packages/ai/src/generate-video/generate-video.ts \
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
+            .changeset/quiet-snails-own.md
+      - name: Build AI package
+        run: pnpm -C packages/ai build
+      - name: Run focused deadline tests
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/generate-video/core-video-operation-deadline.test.ts
+      - name: Publish clean candidate head
+        run: |
+          rm .github/workflows/build-core-video-operation-deadline.yml
+          rm .github/workflows/materialize-core-video-deadline-pr.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/ai/src/generate-video/generate-video.ts \
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
+            .changeset/quiet-snails-own.md \
+            .github/workflows/build-core-video-operation-deadline.yml \
+            .github/workflows/materialize-core-video-deadline-pr.yml
+          git commit -m "fix(ai): make video polling timeout authoritative"
+          git push origin HEAD:fix/core-video-operation-deadline
