@@ -1,49 +1,4 @@
-from pathlib import Path
-
-source_path = Path('packages/mcp/src/tool/mcp-http-transport.ts')
-test_path = Path(
-    'packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts'
-)
-changeset_path = Path('.changeset/retry-inbound-sse-http.md')
-
-source = source_path.read_text(encoding='utf-8')
-old = """        const error = new MCPClientError({
-          message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
-          statusCode: response.status,
-          url: this.url.href,
-        });
-        this.onerror?.(error);
-        return;
-"""
-new = """        const error = new MCPClientError({
-          message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
-          statusCode: response.status,
-          url: this.url.href,
-        });
-        if (
-          response.status === 408 ||
-          response.status === 429 ||
-          response.status >= 500
-        ) {
-          // Route transient HTTP failures through the same bounded reconnect
-          // owner as thrown network failures. Permanent responses remain
-          // terminal for this optional inbound channel.
-          throw error;
-        }
-        this.onerror?.(error);
-        return;
-"""
-if source.count(old) != 1:
-    raise SystemExit(
-        f'expected one inbound HTTP failure boundary, found {source.count(old)}'
-    )
-source_path.write_text(source.replace(old, new, 1), encoding='utf-8')
-
-if test_path.exists():
-    raise SystemExit(f'{test_path} already exists')
-
-test_path.write_text(
-    """import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpMCPTransport } from './mcp-http-transport';
 
 async function flushMicrotasks(iterations = 12): Promise<void> {
@@ -204,18 +159,3 @@ describe('HttpMCPTransport inbound SSE retryable HTTP failures', () => {
     }
   });
 });
-""",
-    encoding='utf-8',
-)
-
-if changeset_path.exists():
-    raise SystemExit(f'{changeset_path} already exists')
-changeset_path.write_text(
-    """---
-'@ai-sdk/mcp': patch
----
-
-Retry transient HTTP failures while opening the optional inbound MCP SSE channel.
-""",
-    encoding='utf-8',
-)
