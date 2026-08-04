@@ -1,0 +1,514 @@
+name: Build core video operation deadline candidate
+
+on:
+  push:
+    branches:
+      - fix/core-video-operation-deadline
+
+permissions:
+  contents: write
+
+jobs:
+  build-candidate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/core-video-operation-deadline
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Materialize candidate
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          source_path = Path('packages/ai/src/generate-video/generate-video.ts')
+          source = source_path.read_text()
+
+          def replace_once(old: str, new: str) -> None:
+              global source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one occurrence, found {count}: {old[:80]!r}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              """  const { retry } = prepareRetries({
+            maxRetries: maxRetriesArg,
+            abortSignal,
+          });""",
+              """  const { maxRetries, retry } = prepareRetries({
+            maxRetries: maxRetriesArg,
+            abortSignal,
+          });""",
+          )
+
+          replace_once(
+              """          webhook,
+                    retry,
+                  });""",
+              """          webhook,
+                    retry,
+                    maxRetries,
+                  });""",
+          )
+
+          replace_once(
+              """  webhook: webhookFactory,
+            retry,
+          }: {
+            model: Experimental_VideoModelV4;
+            callOptions: Experimental_VideoModelV4CallOptions;
+            poll?: GenerateVideoPollOptions;
+            webhook?: GenerateVideoWebhookFactory;
+            retry: <OUTPUT>(fn: () => PromiseLike<OUTPUT>) => PromiseLike<OUTPUT>;
+          }): Promise<Experimental_VideoModelV4Result> {""",
+              """  webhook: webhookFactory,
+            retry,
+            maxRetries,
+          }: {
+            model: Experimental_VideoModelV4;
+            callOptions: Experimental_VideoModelV4CallOptions;
+            poll?: GenerateVideoPollOptions;
+            webhook?: GenerateVideoWebhookFactory;
+            retry: <OUTPUT>(fn: () => PromiseLike<OUTPUT>) => PromiseLike<OUTPUT>;
+            maxRetries: number;
+          }): Promise<Experimental_VideoModelV4Result> {""",
+          )
+
+          replace_once(
+              """  const delay = pollConfig?.delay ?? defaultDelay;
+            const startTime = Date.now();
+
+            if (webhookReceived != null) {""",
+              """  const delay = pollConfig?.delay ?? defaultDelay;
+            const startTime = Date.now();
+            const deadline = createOperationDeadline({
+              timeoutMs,
+              abortSignal: callOptions.abortSignal,
+              startTime,
+            });
+            const { retry: retryStatus } = prepareRetries({
+              maxRetries,
+              abortSignal: deadline.signal,
+            });
+
+            try {
+            if (webhookReceived != null) {""",
+          )
+
+          replace_once(
+              """    await waitForWebhook({
+                  received: webhookReceived,
+                  timeoutMs,
+                  abortSignal: callOptions.abortSignal,
+                  delay,
+                });""",
+              """    await deadline.race(
+                  waitForWebhook({
+                    received: webhookReceived,
+                    timeoutMs,
+                    abortSignal: deadline.signal,
+                    delay,
+                  }),
+                );""",
+          )
+
+          replace_once(
+              """      const elapsedMs = Date.now() - startTime;
+                  if (elapsedMs >= timeoutMs) {
+                    throw new Error(`Video generation timed out after ${timeoutMs}ms.`);
+                  }
+                  await delay(Math.min(intervalMs, timeoutMs - elapsedMs), {
+                    abortSignal: callOptions.abortSignal,
+                  });
+                  if (Date.now() - startTime >= timeoutMs) {
+                    throw new Error(`Video generation timed out after ${timeoutMs}ms.`);
+                  }""",
+              """      const elapsedMs = Date.now() - startTime;
+                  deadline.assertActive();
+                  await deadline.race(
+                    delay(Math.min(intervalMs, timeoutMs - elapsedMs), {
+                      abortSignal: deadline.signal,
+                    }),
+                  );
+                  deadline.assertActive();""",
+          )
+
+          replace_once(
+              """    const statusResult = await retry(() =>
+                  model.doStatus!({
+                    operation: startResult.operation,
+                    abortSignal: callOptions.abortSignal,
+                    headers: callOptions.headers,
+                  }),
+                );""",
+              """    deadline.assertActive();
+                const statusResult = await deadline.race(
+                  retryStatus(() =>
+                    model.doStatus!({
+                      operation: startResult.operation,
+                      abortSignal: deadline.signal,
+                      headers: callOptions.headers,
+                    }),
+                  ),
+                );
+                deadline.assertActive();""",
+          )
+
+          try_start = source.index('            try {\n') + len('            try {\n')
+          function_end = source.index('\n          }\n\n          async function waitForWebhook', try_start)
+          block = source[try_start:function_end]
+          indented = '\n'.join(('  ' + line) if line else line for line in block.split('\n'))
+          source = (
+              source[:try_start]
+              + indented
+              + "\n            } finally {\n              deadline.dispose();\n            }"
+              + source[function_end:]
+          )
+
+          helper = r'''
+          function createOperationDeadline({
+            timeoutMs,
+            abortSignal,
+            startTime,
+          }: {
+            timeoutMs: number;
+            abortSignal?: AbortSignal;
+            startTime: number;
+          }) {
+            const timeoutError = new Error(
+              `Video generation timed out after ${timeoutMs}ms.`,
+            );
+            const deadlineAt = startTime + timeoutMs;
+            const timerController = new AbortController();
+            const deadlineController = new AbortController();
+            const signal = mergeAbortSignals(
+              abortSignal,
+              deadlineController.signal,
+            )!;
+            let expired = false;
+
+            const expire = (): never => {
+              expired = true;
+              if (!deadlineController.signal.aborted) {
+                deadlineController.abort(timeoutError);
+              }
+              throw timeoutError;
+            };
+
+            const assertActive = (): void => {
+              if (expired || Date.now() >= deadlineAt) {
+                expire();
+              }
+            };
+
+            const timeoutPromise: Promise<never> = defaultDelay(timeoutMs, {
+              abortSignal: timerController.signal,
+            }).then(() => expire());
+
+            // The timer can be cancelled after successful completion. Adopt its
+            // rejection so cleanup never becomes an unhandled promise rejection.
+            void timeoutPromise.catch(() => {});
+
+            return {
+              signal,
+              assertActive,
+              async race<T>(operation: PromiseLike<T>): Promise<T> {
+                try {
+                  const result = await Promise.race([
+                    Promise.resolve(operation),
+                    timeoutPromise,
+                  ]);
+                  assertActive();
+                  return result;
+                } catch (error) {
+                  if (expired || Date.now() >= deadlineAt) {
+                    expire();
+                  }
+                  throw error;
+                }
+              },
+              dispose(): void {
+                timerController.abort();
+              },
+            };
+          }
+
+          '''
+          marker = '          async function waitForWebhook'
+          if marker not in source:
+              raise SystemExit('waitForWebhook marker not found')
+          source = source.replace(marker, helper + marker, 1)
+          source_path.write_text(source)
+
+          test_path = Path(
+              'packages/ai/src/generate-video/core-video-operation-deadline.test.ts'
+          )
+          test_path.write_text(r'''import { APICallError } from '@ai-sdk/provider';
+          import { afterEach, describe, expect, it, vi } from 'vitest';
+          import { MockVideoModelV4 } from '../test/mock-video-model-v4';
+          import { experimental_generateVideo } from './generate-video';
+
+          const completedStatus = () => ({
+            status: 'completed' as const,
+            videos: [
+              {
+                type: 'base64' as const,
+                data: 'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+                mediaType: 'video/mp4',
+              },
+            ],
+            warnings: [],
+            response: {
+              timestamp: new Date(0),
+              modelId: 'deadline-model',
+              headers: {},
+            },
+          });
+
+          const startResult = () => ({
+            operation: { id: 'deadline-operation' },
+            warnings: [],
+            response: {
+              timestamp: new Date(0),
+              modelId: 'deadline-model',
+              headers: {},
+            },
+          });
+
+          afterEach(() => {
+            vi.restoreAllMocks();
+          });
+
+          describe('generateVideo operation deadline', () => {
+            it('rejects a completed polling result returned after timeoutMs', async () => {
+              let now = 0;
+              vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+              let markStatusStarted!: () => void;
+              const statusStarted = new Promise<void>(resolve => {
+                markStatusStarted = resolve;
+              });
+              let resolveStatus!: (value: ReturnType<typeof completedStatus>) => void;
+              const status = new Promise<ReturnType<typeof completedStatus>>(resolve => {
+                resolveStatus = resolve;
+              });
+
+              const result = experimental_generateVideo({
+                model: new MockVideoModelV4({
+                  doGenerate: undefined,
+                  doStart: async () => startResult(),
+                  doStatus: async () => {
+                    markStatusStarted();
+                    return status;
+                  },
+                }),
+                prompt: 'deadline test',
+                poll: {
+                  intervalMs: 0,
+                  timeoutMs: 5,
+                  delay: async () => {},
+                },
+              });
+
+              await statusStarted;
+              now = 6;
+              resolveStatus(completedStatus());
+
+              await expect(result).rejects.toThrow(
+                'Video generation timed out after 5ms.',
+              );
+            });
+
+            it('keeps the deadline authoritative after a webhook notification', async () => {
+              let now = 0;
+              vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+              let markStatusStarted!: () => void;
+              const statusStarted = new Promise<void>(resolve => {
+                markStatusStarted = resolve;
+              });
+              let resolveStatus!: (value: ReturnType<typeof completedStatus>) => void;
+              const status = new Promise<ReturnType<typeof completedStatus>>(resolve => {
+                resolveStatus = resolve;
+              });
+
+              const result = experimental_generateVideo({
+                model: new MockVideoModelV4({
+                  doGenerate: undefined,
+                  handleWebhookOption: async ({ webhook }) => {
+                    const { url, received } = await webhook();
+                    return { webhookUrl: url, received };
+                  },
+                  doStart: async () => startResult(),
+                  doStatus: async () => {
+                    markStatusStarted();
+                    return status;
+                  },
+                }),
+                prompt: 'webhook deadline test',
+                poll: {
+                  timeoutMs: 5,
+                  delay: () => new Promise<void>(() => {}),
+                },
+                webhook: async () => ({
+                  url: 'https://example.test/webhook',
+                  received: Promise.resolve({ headers: {}, body: {} }),
+                }),
+              });
+
+              await statusStarted;
+              now = 6;
+              resolveStatus(completedStatus());
+
+              await expect(result).rejects.toThrow(
+                'Video generation timed out after 5ms.',
+              );
+            });
+
+            it('does not start another status retry after the deadline', async () => {
+              let now = 0;
+              vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+              let markFirstAttempt!: () => void;
+              const firstAttempt = new Promise<void>(resolve => {
+                markFirstAttempt = resolve;
+              });
+              let attempts = 0;
+
+              const result = experimental_generateVideo({
+                model: new MockVideoModelV4({
+                  doGenerate: undefined,
+                  doStart: async () => startResult(),
+                  doStatus: async () => {
+                    attempts++;
+                    if (attempts === 1) {
+                      markFirstAttempt();
+                      throw new APICallError({
+                        message: 'temporary status failure',
+                        url: 'https://example.test/status',
+                        requestBodyValues: {},
+                        statusCode: 500,
+                        responseHeaders: { 'retry-after-ms': '10' },
+                      });
+                    }
+                    return completedStatus();
+                  },
+                }),
+                prompt: 'retry deadline test',
+                maxRetries: 1,
+                poll: {
+                  intervalMs: 0,
+                  timeoutMs: 5,
+                  delay: async () => {},
+                },
+              });
+
+              await firstAttempt;
+              now = 6;
+
+              await expect(result).rejects.toThrow(
+                'Video generation timed out after 5ms.',
+              );
+              expect(attempts).toBe(1);
+            });
+
+            it('settles when a status transport ignores abort and never settles', async () => {
+              const result = experimental_generateVideo({
+                model: new MockVideoModelV4({
+                  doGenerate: undefined,
+                  doStart: async () => startResult(),
+                  doStatus: () => new Promise<never>(() => {}),
+                }),
+                prompt: 'never settling status test',
+                poll: {
+                  intervalMs: 0,
+                  timeoutMs: 10,
+                  delay: async () => {},
+                },
+              });
+
+              await expect(result).rejects.toThrow(
+                'Video generation timed out after 10ms.',
+              );
+            });
+
+            it('preserves caller abort before the operation deadline', async () => {
+              const controller = new AbortController();
+              let markStatusStarted!: () => void;
+              const statusStarted = new Promise<void>(resolve => {
+                markStatusStarted = resolve;
+              });
+
+              const result = experimental_generateVideo({
+                model: new MockVideoModelV4({
+                  doGenerate: undefined,
+                  doStart: async () => startResult(),
+                  doStatus: ({ abortSignal }) =>
+                    new Promise<never>((_, reject) => {
+                      markStatusStarted();
+                      abortSignal?.addEventListener(
+                        'abort',
+                        () => reject(new DOMException('Aborted', 'AbortError')),
+                        { once: true },
+                      );
+                    }),
+                }),
+                prompt: 'caller abort test',
+                abortSignal: controller.signal,
+                poll: {
+                  intervalMs: 0,
+                  timeoutMs: 1_000,
+                  delay: async () => {},
+                },
+              });
+
+              await statusStarted;
+              controller.abort();
+
+              await expect(result).rejects.toHaveProperty('name', 'AbortError');
+            });
+          });
+          ''')
+
+          changeset = Path('.changeset/quiet-snails-own.md')
+          changeset.write_text(r'''---
+          'ai': patch
+          ---
+
+          Make async video polling timeouts authoritative across polling delays,
+          webhook finalization, status requests, retries, and transports that ignore
+          cancellation.
+          ''')
+          PY
+      - name: Format candidate
+        run: |
+          pnpm exec oxfmt \
+            packages/ai/src/generate-video/generate-video.ts \
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
+            .changeset/quiet-snails-own.md
+      - name: Build AI package
+        run: pnpm -C packages/ai build
+      - name: Run focused deadline tests
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/generate-video/core-video-operation-deadline.test.ts
+      - name: Publish clean candidate head
+        run: |
+          rm .github/workflows/build-core-video-operation-deadline.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/ai/src/generate-video/generate-video.ts \
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
+            .changeset/quiet-snails-own.md \
+            .github/workflows/build-core-video-operation-deadline.yml
+          git commit -m "fix(ai): make video polling timeout authoritative"
+          git push origin HEAD:fix/core-video-operation-deadline
