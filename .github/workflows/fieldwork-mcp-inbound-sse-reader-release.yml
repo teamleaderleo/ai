@@ -85,7 +85,8 @@ jobs:
             packages/mcp/src/tool/mcp-http-transport.ts \
             packages/mcp/src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts
           git diff --check
-          mapfile -t changed < <(git diff --name-only | sort)
+          mapfile -t changed < <(git status --short | sed 's/^...//' | sort)
+          printf 'changed files:\n%s\n' "${changed[*]}"
           expected=(
             packages/mcp/src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts
             packages/mcp/src/tool/mcp-http-transport.ts
