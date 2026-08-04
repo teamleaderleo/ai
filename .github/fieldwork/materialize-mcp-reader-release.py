@@ -24,14 +24,15 @@ tail_old = """              this.scheduleInboundSseReconnection();
 """
 tail_new = """              this.scheduleInboundSseReconnection();
             }
-          } finally {
-            try {
-              reader.releaseLock();
-            } catch {
-              // Reader cleanup must not replace the selected stream outcome.
-            }
+          }
+        } finally {
+          try {
+            reader.releaseLock();
+          } catch {
+            // Reader cleanup must not replace the selected stream outcome.
           }
         }
+      }
       };
 """
 if source.count(tail_old) != 1:
