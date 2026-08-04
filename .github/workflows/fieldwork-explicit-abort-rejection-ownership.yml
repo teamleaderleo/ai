@@ -23,7 +23,7 @@ env:
 jobs:
   focused:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -64,6 +64,9 @@ jobs:
             packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
             packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
 
+      - name: Build AI package dependency closure
+        run: pnpm turbo build --filter=ai...
+
       - name: Run Node explicit-abort controls
         run: |
           pnpm --filter ai exec vitest \
@@ -78,11 +81,9 @@ jobs:
             --config vitest.edge.config.js --run \
             src/generate-text/stream-text-explicit-abort-races.test.ts
 
-      - name: Run package type check and build
+      - name: Run package type check
         if: matrix.node == 22
-        run: |
-          pnpm --filter ai type-check
-          pnpm --filter ai build
+        run: pnpm --filter ai type-check
 
       - name: Verify formatting and three-file fence
         run: |
