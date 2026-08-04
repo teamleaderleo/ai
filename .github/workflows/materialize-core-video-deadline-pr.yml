@@ -41,8 +41,8 @@ jobs:
             packages/ai/src/generate-video/generate-video.ts \
             packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
             .changeset/quiet-snails-own.md
-      - name: Build AI package
-        run: pnpm -C packages/ai build
+      - name: Build workspace packages
+        run: pnpm run build:packages
       - name: Run deadline and existing generate-video tests
         run: |
           pnpm -C packages/ai exec vitest --config vitest.node.config.js --run \
