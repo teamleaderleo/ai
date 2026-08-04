@@ -85,7 +85,7 @@ jobs:
         if: matrix.node == 22
         run: pnpm --filter ai type-check
 
-      - name: Verify formatting and three-file fence
+      - name: Verify formatting and two-file fence
         run: |
           pnpm exec prettier --check \
             packages/ai/src/generate-text/stream-text.ts \
@@ -93,8 +93,8 @@ jobs:
             packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
           git diff --check
           mapfile -t changed < <(git diff --name-only | sort)
+          printf 'changed files:\n%s\n' "${changed[*]}"
           expected=(
-            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
             packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
             packages/ai/src/generate-text/stream-text.ts
           )
