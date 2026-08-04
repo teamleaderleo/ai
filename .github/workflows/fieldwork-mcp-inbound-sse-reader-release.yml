@@ -1,0 +1,317 @@
+name: Fieldwork MCP inbound SSE reader release
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/mcp-inbound-sse-lifecycle-repair
+    paths:
+      - .github/workflows/fieldwork-mcp-inbound-sse-reader-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-mcp-inbound-sse-reader-release
+  cancel-in-progress: true
+
+env:
+  SOURCE_HEAD: c26e29ff39b414e368526afa9eb4cc3d1230a84a
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+
+      - name: Materialize bounded reader-release repair
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          source_path = Path('packages/mcp/src/tool/mcp-http-transport.ts')
+          source = source_path.read_text(encoding='utf-8')
+          old = dedent('''\
+                  } finally {
+                    if (this.inboundSseConnection === connection) {
+                      const reconnect =
+                        shouldReconnect && !this.abortController?.signal.aborted;
+                      if (shouldCancelReader) {
+                        // Release an errored reader now rather than retaining a stale
+                        // connection until transport.close(). Cancellation failures remain
+                        // observable through the existing connection close handler.
+                        connection.close();
+                      }
+                      this.inboundSseConnection = undefined;
+                      if (reconnect) {
+                        // A successfully opened stream starts a fresh sequence of failed
+                        // reopen attempts. This allows protocol polling to continue across
+                        // repeated clean server closures.
+                        this.scheduleInboundSseReconnection();
+                      }
+                    }
+                  }
+          ''')
+          new = dedent('''\
+                  } finally {
+                    let reconnect = false;
+                    if (this.inboundSseConnection === connection) {
+                      reconnect =
+                        shouldReconnect && !this.abortController?.signal.aborted;
+                      if (shouldCancelReader) {
+                        // Request cancellation through the connection owner. Lock release
+                        // remains here, after the pending read has settled.
+                        connection.close();
+                      }
+                      this.inboundSseConnection = undefined;
+                    }
+
+                    try {
+                      reader.releaseLock();
+                    } catch {
+                      // Reader cleanup must not replace the selected stream outcome.
+                    }
+
+                    if (reconnect) {
+                      // A successfully opened stream starts a fresh sequence of failed
+                      // reopen attempts. This allows protocol polling to continue across
+                      // repeated clean server closures.
+                      this.scheduleInboundSseReconnection();
+                    }
+                  }
+          ''')
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one inbound SSE finalizer, found {source.count(old)}')
+          source_path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path(
+              'packages/mcp/src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts'
+          )
+          test = test_path.read_text(encoding='utf-8')
+          helper_marker = dedent('''\
+          async function flushMicrotasks(iterations = 8): Promise<void> {
+            for (let index = 0; index < iterations; index += 1) {
+              await Promise.resolve();
+            }
+          }
+          ''')
+          helpers = helper_marker + dedent('''\
+
+          type ControlledInboundSseReader = {
+            read: ReturnType<typeof vi.fn>;
+            cancel: ReturnType<typeof vi.fn>;
+            releaseLock: ReturnType<typeof vi.fn>;
+          };
+
+          function createInboundSseResponse(
+            reader: ControlledInboundSseReader,
+          ): Response {
+            const body = {
+              pipeThrough() {
+                return body;
+              },
+              getReader() {
+                return reader;
+              },
+            };
+
+            return {
+              ok: true,
+              status: 200,
+              statusText: 'OK',
+              headers: new Headers({ 'content-type': 'text/event-stream' }),
+              body,
+            } as unknown as Response;
+          }
+
+          function deferred<T>(): {
+            promise: Promise<T>;
+            resolve: (value: T) => void;
+          } {
+            let resolve!: (value: T) => void;
+            const promise = new Promise<T>(next => {
+              resolve = next;
+            });
+            return { promise, resolve };
+          }
+          ''')
+          if test.count(helper_marker) != 1:
+              raise SystemExit(
+                  f'expected one helper insertion point, found {test.count(helper_marker)}'
+              )
+          test = test.replace(helper_marker, helpers, 1)
+
+          final_marker = '\n});\n'
+          insertion = dedent('''\
+
+            it('releases the inbound reader after clean EOF before reconnecting', async () => {
+              let getCalls = 0;
+              const reader: ControlledInboundSseReader = {
+                read: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+                cancel: vi.fn().mockResolvedValue(undefined),
+                releaseLock: vi.fn(),
+              };
+              const fetch = vi.fn(
+                async (_input: RequestInfo | URL, init?: RequestInit) => {
+                  if (init?.method === 'GET') {
+                    getCalls += 1;
+                    return getCalls === 1
+                      ? createInboundSseResponse(reader)
+                      : new Response(null, { status: 405 });
+                  }
+                  return new Response(null, { status: 202 });
+                },
+              );
+              const transport = new HttpMCPTransport({
+                url: 'http://localhost:4000/mcp',
+                fetch,
+              });
+
+              try {
+                await transport.start();
+                await flushMicrotasks();
+
+                expect(reader.read).toHaveBeenCalledTimes(1);
+                expect(reader.cancel).not.toHaveBeenCalled();
+                expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+
+                await vi.advanceTimersByTimeAsync(1000);
+                await flushMicrotasks();
+                expect(getCalls).toBe(2);
+              } finally {
+                await transport.close();
+              }
+            });
+
+            it('releases the inbound reader after close settles a pending read', async () => {
+              const pendingRead = deferred<{
+                done: boolean;
+                value: undefined;
+              }>();
+              const reader: ControlledInboundSseReader = {
+                read: vi.fn().mockReturnValue(pendingRead.promise),
+                cancel: vi.fn().mockImplementation(() => {
+                  pendingRead.resolve({ done: true, value: undefined });
+                  return Promise.resolve();
+                }),
+                releaseLock: vi.fn(),
+              };
+              const fetch = vi.fn(
+                async (_input: RequestInfo | URL, init?: RequestInit) =>
+                  init?.method === 'GET'
+                    ? createInboundSseResponse(reader)
+                    : new Response(null, { status: 202 }),
+              );
+              const transport = new HttpMCPTransport({
+                url: 'http://localhost:4000/mcp',
+                fetch,
+              });
+
+              await transport.start();
+              await flushMicrotasks();
+              expect(reader.read).toHaveBeenCalledTimes(1);
+
+              await transport.close();
+              await flushMicrotasks();
+
+              expect(reader.cancel).toHaveBeenCalledTimes(1);
+              expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+            });
+
+            it('preserves read-error precedence and releases the lock when cancellation rejects', async () => {
+              const readError = new Error('inbound read failed');
+              const cancelError = new Error('inbound cancel failed');
+              const errors: unknown[] = [];
+              const reader: ControlledInboundSseReader = {
+                read: vi.fn().mockRejectedValue(readError),
+                cancel: vi.fn().mockRejectedValue(cancelError),
+                releaseLock: vi.fn(),
+              };
+              const fetch = vi.fn(
+                async (_input: RequestInfo | URL, init?: RequestInit) =>
+                  init?.method === 'GET'
+                    ? createInboundSseResponse(reader)
+                    : new Response(null, { status: 202 }),
+              );
+              const transport = new HttpMCPTransport({
+                url: 'http://localhost:4000/mcp',
+                fetch,
+              });
+              transport.onerror = error => {
+                errors.push(error);
+              };
+
+              try {
+                await transport.start();
+                await flushMicrotasks(16);
+
+                expect(errors).toEqual([readError, cancelError]);
+                expect(reader.cancel).toHaveBeenCalledTimes(1);
+                expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+              } finally {
+                await transport.close();
+              }
+            });
+          ''')
+          position = test.rfind(final_marker)
+          if position < 0:
+              raise SystemExit('could not find lifecycle describe terminator')
+          test = test[:position] + insertion + test[position:]
+          test_path.write_text(test, encoding='utf-8')
+          PY
+
+      - name: Format candidate files
+        run: |
+          pnpm exec prettier --write \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts
+
+      - name: Run focused Node and Edge controls
+        run: |
+          pnpm --filter @ai-sdk/mcp exec vitest \
+            --config vitest.node.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts
+          pnpm --filter @ai-sdk/mcp exec vitest \
+            --config vitest.edge.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts
+
+      - name: Run package type check and build
+        run: |
+          pnpm --filter @ai-sdk/mcp type-check
+          pnpm --filter @ai-sdk/mcp build
+
+      - name: Verify formatting and two-file fence
+        run: |
+          pnpm exec prettier --check \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts
+          git diff --check
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts
+            packages/mcp/src/tool/mcp-http-transport.ts
+          )
+          test "${changed[*]}" = "${expected[*]}"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
