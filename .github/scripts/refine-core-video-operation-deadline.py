@@ -69,18 +69,31 @@ flow_and_deadline = r'''async function executeStartStatusFlow({
     timeoutMs,
     abortSignal: callOptions.abortSignal,
     startTime,
-    delay,
   });
+
+  // Preserve the provider-facing caller signal when present. When the caller
+  // supplies no signal, the local deadline signal enables cooperative
+  // cancellation in addition to the authoritative outer race.
+  const statusAbortSignal = callOptions.abortSignal ?? deadline.signal;
+  const pollingDelayAbortSignal =
+    pollConfig?.delay == null ? statusAbortSignal : callOptions.abortSignal;
   const { retry: retryStatus } = prepareRetries({
     maxRetries,
-    abortSignal: deadline.signal,
+    abortSignal: statusAbortSignal,
   });
 
   try {
     if (webhookReceived != null) {
-      // 3a. Webhook flow: the operation deadline owns notification receipt and
-      // the final status call.
-      await deadline.race(webhookReceived);
+      // 3a. Preserve the configured webhook wait implementation while the
+      // operation deadline also fences the final status call.
+      await deadline.race(
+        waitForWebhook({
+          received: webhookReceived,
+          timeoutMs,
+          abortSignal: callOptions.abortSignal,
+          delay,
+        }),
+      );
     }
 
     while (true) {
@@ -90,7 +103,7 @@ flow_and_deadline = r'''async function executeStartStatusFlow({
         deadline.assertActive();
         await deadline.race(
           delay(Math.min(intervalMs, Math.max(0, timeoutMs - elapsedMs)), {
-            abortSignal: deadline.signal,
+            abortSignal: pollingDelayAbortSignal,
           }),
         );
         deadline.assertActive();
@@ -101,7 +114,7 @@ flow_and_deadline = r'''async function executeStartStatusFlow({
         retryStatus(() =>
           model.doStatus!({
             operation: startResult.operation,
-            abortSignal: deadline.signal,
+            abortSignal: statusAbortSignal,
             headers: callOptions.headers,
           }),
         ),
@@ -147,15 +160,10 @@ function createOperationDeadline({
   timeoutMs,
   abortSignal,
   startTime,
-  delay,
 }: {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   startTime: number;
-  delay: (
-    delayInMs: number,
-    options?: { abortSignal?: AbortSignal },
-  ) => PromiseLike<void>;
 }) {
   const timeoutError = new Error(
     `Video generation timed out after ${timeoutMs}ms.`,
@@ -165,19 +173,9 @@ function createOperationDeadline({
     typeof globalThis.AbortController === 'function'
       ? new globalThis.AbortController()
       : undefined;
-  const timeoutController =
-    typeof globalThis.AbortController === 'function'
-      ? new globalThis.AbortController()
-      : undefined;
-  const signal =
-    deadlineController == null
-      ? abortSignal
-      : mergeAbortSignals(abortSignal, deadlineController.signal);
-  const timeoutSignal =
-    timeoutController == null
-      ? abortSignal
-      : mergeAbortSignals(abortSignal, timeoutController.signal);
+  const signal = abortSignal ?? deadlineController?.signal;
   let expired = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   const abortDeadline = (): void => {
     expired = true;
@@ -200,11 +198,21 @@ function createOperationDeadline({
   const timeoutPromise: Promise<never> =
     deadlineAt === Number.POSITIVE_INFINITY
       ? new Promise<never>(() => {})
-      : Promise.resolve(
-          delay(Math.max(0, timeoutMs), {
-            abortSignal: timeoutSignal,
-          }),
-        ).then(() => throwTimeout());
+      : new Promise<never>((_, reject) => {
+          const schedule = () => {
+            const remainingMs = deadlineAt - Date.now();
+            if (!(remainingMs > 0)) {
+              abortDeadline();
+              reject(timeoutError);
+              return;
+            }
+            timeoutId = setTimeout(
+              schedule,
+              Math.min(remainingMs, 2_147_483_647),
+            );
+          };
+          schedule();
+        });
 
   // Promise.race adopts losing operations. This handler also covers a
   // zero-duration deadline before the first race is installed.
@@ -229,64 +237,81 @@ function createOperationDeadline({
       }
     },
     dispose(): void {
-      timeoutController?.abort();
+      if (timeoutId != null) {
+        clearTimeout(timeoutId);
+      }
     },
   };
+}
+
+async function waitForWebhook({
+  received,
+  timeoutMs,
+  abortSignal,
+  delay,
+}: {
+  received: PromiseLike<Experimental_VideoModelV4OperationWebhook>;
+  timeoutMs: number;
+  abortSignal?: AbortSignal;
+  delay: (
+    delayInMs: number,
+    options?: { abortSignal?: AbortSignal },
+  ) => PromiseLike<void>;
+}) {
+  const timeoutController =
+    typeof globalThis.AbortController === 'function'
+      ? new globalThis.AbortController()
+      : undefined;
+  try {
+    await Promise.race([
+      received,
+      delay(timeoutMs, {
+        abortSignal:
+          timeoutController == null
+            ? abortSignal
+            : mergeAbortSignals(abortSignal, timeoutController.signal),
+      }).then(() => {
+        throw new Error(`Video generation timed out after ${timeoutMs}ms.`);
+      }),
+    ]);
+  } finally {
+    timeoutController?.abort();
+  }
 }
 
 '''
 source_path.write_text(source[:flow_start] + flow_and_deadline + source[flow_end:])
 
 test = test_path.read_text()
-test = test.replace("        delay: async () => {},\n", "")
-test = test.replace(
-    "        delay: () => new Promise<void>(() => {}),\n",
-    "",
-)
-custom_clock_test = r'''
+caller_signal_test = r'''
 
-  it('uses the custom delay as the operation deadline clock', async () => {
-    let markStatusStarted!: () => void;
-    const statusStarted = new Promise<void>(resolve => {
-      markStatusStarted = resolve;
-    });
-    let releaseDeadline!: () => void;
-    const deadline = new Promise<void>(resolve => {
-      releaseDeadline = resolve;
-    });
-    const delayCalls: number[] = [];
+  it('passes the caller abort signal unchanged to status calls', async () => {
+    const controller = new AbortController();
+    let statusSignal: AbortSignal | undefined;
 
-    const result = experimental_generateVideo({
+    await experimental_generateVideo({
       model: new MockVideoModelV4({
         doGenerate: undefined,
         doStart: async () => startResult(),
-        doStatus: () => {
-          markStatusStarted();
-          return new Promise<never>(() => {});
+        doStatus: async ({ abortSignal }) => {
+          statusSignal = abortSignal;
+          return completedStatus();
         },
       }),
-      prompt: 'custom deadline clock test',
+      prompt: 'caller signal identity test',
+      abortSignal: controller.signal,
       poll: {
         intervalMs: 0,
-        timeoutMs: 10,
-        delay: delayInMs => {
-          delayCalls.push(delayInMs);
-          return delayInMs === 0 ? Promise.resolve() : deadline;
-        },
+        timeoutMs: 1_000,
+        delay: async () => {},
       },
     });
 
-    await statusStarted;
-    expect(delayCalls).toContain(10);
-    releaseDeadline();
-
-    await expect(result).rejects.toThrow(
-      'Video generation timed out after 10ms.',
-    );
+    expect(statusSignal).toBe(controller.signal);
   });
 '''
 closing = "\n});\n"
 if not test.endswith(closing):
     raise SystemExit('focused test closing marker changed')
-test = test[: -len(closing)] + custom_clock_test + closing
+test = test[: -len(closing)] + caller_signal_test + closing
 test_path.write_text(test)
