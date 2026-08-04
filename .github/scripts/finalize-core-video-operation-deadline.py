@@ -30,6 +30,20 @@ if source.count(signals_old) != 1:
     )
 source = source.replace(signals_old, signals_new, 1)
 
+webhook_old = """          timeoutMs,
+          abortSignal: callOptions.abortSignal,
+          delay,
+"""
+webhook_new = """          timeoutMs,
+          abortSignal: retryAbortSignal,
+          delay,
+"""
+if source.count(webhook_old) != 1:
+    raise SystemExit(
+        f'expected one webhook abort-signal block, found {source.count(webhook_old)}'
+    )
+source = source.replace(webhook_old, webhook_new, 1)
+
 signal_old = """  const signal = abortSignal ?? deadlineController?.signal;
   let expired = false;
 """
@@ -64,7 +78,7 @@ if source.count(return_old) != 1:
 source_path.write_text(source.replace(return_old, return_new, 1))
 
 test = test_path.read_text()
-new_test = r'''
+new_tests = r'''
 
   it('stops retry scheduling at the deadline while preserving the caller signal', async () => {
     let now = 0;
@@ -117,10 +131,66 @@ new_test = r'''
     expect(attempts).toBe(1);
     expect(statusSignals).toEqual([controller.signal]);
   });
+
+  it('aborts a cooperative webhook delay when the wall-clock deadline wins', async () => {
+    let markDelayStarted!: () => void;
+    const delayStarted = new Promise<void>(resolve => {
+      markDelayStarted = resolve;
+    });
+    let markDelayAborted!: () => void;
+    const delayAborted = new Promise<void>(resolve => {
+      markDelayAborted = resolve;
+    });
+
+    const result = experimental_generateVideo({
+      model: new MockVideoModelV4({
+        doGenerate: undefined,
+        handleWebhookOption: async ({ webhook }) => {
+          const { url, received } = await webhook();
+          return { webhookUrl: url, received };
+        },
+        doStart: async () => startResult(),
+        doStatus: async () => completedStatus(),
+      }),
+      prompt: 'webhook cleanup deadline test',
+      poll: {
+        timeoutMs: 10,
+        delay: (_delayInMs, { abortSignal } = {}) =>
+          new Promise<void>((_resolve, reject) => {
+            markDelayStarted();
+            const rejectForAbort = () => {
+              markDelayAborted();
+              reject(
+                abortSignal?.reason ?? new DOMException('Aborted', 'AbortError'),
+              );
+            };
+            if (abortSignal?.aborted) {
+              rejectForAbort();
+              return;
+            }
+            abortSignal?.addEventListener('abort', rejectForAbort, {
+              once: true,
+            });
+          }),
+      },
+      webhook: async () => ({
+        url: 'https://example.test/webhook',
+        received: new Promise<never>(() => {}),
+      }),
+    });
+
+    await delayStarted;
+    await expect(result).rejects.toThrow(
+      'Video generation timed out after 10ms.',
+    );
+    await delayAborted;
+  });
 '''
 closing = '\n});\n'
 if not test.endswith(closing):
     raise SystemExit('focused test closing marker changed')
 if 'stops retry scheduling at the deadline while preserving the caller signal' in test:
     raise SystemExit('caller-signal retry deadline test already exists')
-test_path.write_text(test[: -len(closing)] + new_test + closing)
+if 'aborts a cooperative webhook delay when the wall-clock deadline wins' in test:
+    raise SystemExit('webhook cleanup deadline test already exists')
+test_path.write_text(test[: -len(closing)] + new_tests + closing)
