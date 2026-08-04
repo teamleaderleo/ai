@@ -1,0 +1,97 @@
+name: Fieldwork explicit abort rejection ownership
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/explicit-abort-terminal-settlement-repair
+    paths:
+      - .github/workflows/fieldwork-explicit-abort-rejection-ownership.yml
+      - .github/fieldwork/materialize-explicit-abort-rejection-ownership.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-explicit-abort-rejection-ownership
+  cancel-in-progress: true
+
+env:
+  SOURCE_HEAD: 1413abfbbc6fc1ea0683d30613052e26c2b1ce51
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 26]
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+
+      - name: Materialize observer-before-reject repair
+        run: python3 .github/fieldwork/materialize-explicit-abort-rejection-ownership.py
+
+      - name: Format candidate files
+        run: |
+          pnpm exec prettier --write \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+
+      - name: Run Node explicit-abort controls
+        run: |
+          pnpm --filter ai exec vitest \
+            --config vitest.node.config.js --run \
+            src/generate-text/stream-text-explicit-abort-races.test.ts \
+            src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+
+      - name: Run Edge explicit-abort controls
+        if: matrix.node == 22
+        run: |
+          pnpm --filter ai exec vitest \
+            --config vitest.edge.config.js --run \
+            src/generate-text/stream-text-explicit-abort-races.test.ts
+
+      - name: Run package type check and build
+        if: matrix.node == 22
+        run: |
+          pnpm --filter ai type-check
+          pnpm --filter ai build
+
+      - name: Verify formatting and three-file fence
+        run: |
+          pnpm exec prettier --check \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          git diff --check
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+            packages/ai/src/generate-text/stream-text.ts
+          )
+          test "${changed[*]}" = "${expected[*]}"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
