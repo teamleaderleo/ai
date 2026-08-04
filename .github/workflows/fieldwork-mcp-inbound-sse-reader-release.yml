@@ -23,7 +23,7 @@ env:
 jobs:
   focused:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out exact source head
         uses: actions/checkout@v4
@@ -59,6 +59,9 @@ jobs:
             packages/mcp/src/tool/mcp-http-transport.ts \
             packages/mcp/src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts
 
+      - name: Build MCP package dependency closure
+        run: pnpm turbo build --filter=@ai-sdk/mcp...
+
       - name: Run focused and adjacent Node controls
         run: |
           pnpm --filter @ai-sdk/mcp exec vitest \
@@ -73,10 +76,8 @@ jobs:
             src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts \
             src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts
 
-      - name: Run package type check and build
-        run: |
-          pnpm --filter @ai-sdk/mcp type-check
-          pnpm --filter @ai-sdk/mcp build
+      - name: Run package type check
+        run: pnpm --filter @ai-sdk/mcp type-check
 
       - name: Verify formatting and two-file fence
         run: |
