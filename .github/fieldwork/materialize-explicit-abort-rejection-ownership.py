@@ -145,7 +145,10 @@ describe('streamText explicit abort rejection ownership', () => {
       });
 
       await collectStream(result.stream);
-      await expect(result.responseMessages).rejects.toBe(setupError);
+      await expect(result.responseMessages).rejects.toMatchObject({
+        name: 'AI_NoOutputGeneratedError',
+        message: 'No output generated. Check the stream for errors.',
+      });
       expect(doStream).not.toHaveBeenCalled();
       await flushUnhandledRejections();
 
