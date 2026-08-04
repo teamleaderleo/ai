@@ -92,7 +92,7 @@ jobs:
             packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
             packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
           git diff --check
-          mapfile -t changed < <(git diff --name-only | sort)
+          mapfile -t changed < <(git status --short | sed 's/^...//' | sort)
           printf 'changed files:\n%s\n' "${changed[*]}"
           expected=(
             packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
