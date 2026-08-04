@@ -55,7 +55,7 @@ if test_path.exists():
 
 test_path.write_text(
     """import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from '../test/mock-language-model-v4';
 import { streamText } from './stream-text';
 
@@ -126,7 +126,7 @@ describe('streamText explicit abort rejection ownership', () => {
     }
   });
 
-  it('observes initial-response and derived-result rejection before setup failure settlement', async () => {
+  it('observes initial-response rejection before prepareStep failure settlement', async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
       unhandled.push(reason);
@@ -134,21 +134,19 @@ describe('streamText explicit abort rejection ownership', () => {
     process.on('unhandledRejection', onUnhandled);
 
     try {
-      const setupError = new Error('onStart failed');
+      const setupError = new Error('prepareStep failed');
+      const doStream = vi.fn();
       const result = streamText({
-        model: new MockLanguageModelV4({
-          doStream: async () => {
-            throw new Error('provider should not run');
-          },
-        }),
+        model: new MockLanguageModelV4({ doStream }),
         prompt: 'test-input',
-        onStart: () => {
+        prepareStep: () => {
           throw setupError;
         },
       });
 
       await collectStream(result.stream);
-      await expect(result.responseMessages).rejects.toBeDefined();
+      await expect(result.responseMessages).rejects.toBe(setupError);
+      expect(doStream).not.toHaveBeenCalled();
       await flushUnhandledRejections();
 
       expect(unhandled).toEqual([]);
