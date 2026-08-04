@@ -18,7 +18,7 @@ jobs:
       github.actor != 'github-actions[bot]' &&
       github.event.pull_request.head.ref == 'fix/core-video-operation-deadline'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,24 +31,122 @@ jobs:
           cache: pnpm
       - name: Install workspace
         run: pnpm install --frozen-lockfile
-      - name: Materialize candidate
+      - name: Materialize or repair candidate
         run: |
           python <<'PY'
           from pathlib import Path
 
-          workflow = Path(
-              '.github/workflows/build-core-video-operation-deadline.yml'
-          ).read_text()
-          start_marker = "          python <<'PY'\n"
-          end_marker = "          PY\n"
-          start = workflow.index(start_marker) + len(start_marker)
-          end = workflow.index(end_marker, start)
-          script = workflow[start:end]
-          script = '\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in script.splitlines()
+          source_path = Path('packages/ai/src/generate-video/generate-video.ts')
+          test_path = Path(
+              'packages/ai/src/generate-video/core-video-operation-deadline.test.ts'
           )
-          exec(compile(script, '<materialize-core-video-deadline>', 'exec'))
+
+          if not test_path.exists():
+              workflow_path = Path(
+                  '.github/workflows/build-core-video-operation-deadline.yml'
+              )
+              if not workflow_path.exists():
+                  raise SystemExit('candidate source and materialization source are both absent')
+              workflow = workflow_path.read_text()
+              start_marker = "          python <<'PY'\n"
+              end_marker = "          PY\n"
+              start = workflow.index(start_marker) + len(start_marker)
+              end = workflow.index(end_marker, start)
+              script = workflow[start:end]
+              script = '\n'.join(
+                  line[10:] if line.startswith('          ') else line
+                  for line in script.splitlines()
+              )
+              exec(compile(script, '<materialize-core-video-deadline>', 'exec'))
+
+          source = source_path.read_text()
+          helper_start = source.index('function createOperationDeadline({')
+          helper_end = source.index('async function waitForWebhook', helper_start)
+          helper = r'''function createOperationDeadline({
+            timeoutMs,
+            abortSignal,
+            startTime,
+          }: {
+            timeoutMs: number;
+            abortSignal?: AbortSignal;
+            startTime: number;
+          }) {
+            const timeoutError = new Error(
+              `Video generation timed out after ${timeoutMs}ms.`,
+            );
+            const deadlineAt = startTime + timeoutMs;
+            const deadlineController =
+              typeof globalThis.AbortController === 'function'
+                ? new globalThis.AbortController()
+                : undefined;
+            const signal =
+              deadlineController == null
+                ? abortSignal
+                : mergeAbortSignals(abortSignal, deadlineController.signal);
+            let expired = false;
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+            const abortDeadline = (): void => {
+              expired = true;
+              if (deadlineController?.signal.aborted === false) {
+                deadlineController.abort(timeoutError);
+              }
+            };
+
+            const throwTimeout = (): never => {
+              abortDeadline();
+              throw timeoutError;
+            };
+
+            const assertActive = (): void => {
+              if (expired || Date.now() >= deadlineAt) {
+                throwTimeout();
+              }
+            };
+
+            const timeoutPromise: Promise<never> = Number.isFinite(timeoutMs)
+              ? new Promise<never>((_, reject) => {
+                  timeoutId = setTimeout(() => {
+                    abortDeadline();
+                    reject(timeoutError);
+                  }, Math.max(0, timeoutMs));
+                })
+              : new Promise<never>(() => {});
+
+            // Every race adopts the operation and timeout promises. This extra
+            // handler also covers a zero-duration deadline before the first race.
+            void timeoutPromise.catch(() => {});
+
+            return {
+              signal,
+              assertActive,
+              async race<T>(operation: PromiseLike<T>): Promise<T> {
+                try {
+                  const result = await Promise.race([
+                    Promise.resolve(operation),
+                    timeoutPromise,
+                  ]);
+                  assertActive();
+                  return result;
+                } catch (error) {
+                  if (expired || Date.now() >= deadlineAt) {
+                    throwTimeout();
+                  }
+                  throw error;
+                }
+              },
+              dispose(): void {
+                if (timeoutId != null) {
+                  clearTimeout(timeoutId);
+                }
+              },
+            };
+          }
+
+          '''
+          source_path.write_text(
+              source[:helper_start] + helper + source[helper_end:]
+          )
           PY
       - name: Format candidate
         run: |
@@ -58,18 +156,28 @@ jobs:
             .changeset/quiet-snails-own.md
       - name: Build AI package
         run: pnpm -C packages/ai build
-      - name: Run focused deadline tests
-        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/generate-video/core-video-operation-deadline.test.ts
+      - name: Run deadline and existing generate-video tests
+        run: |
+          pnpm -C packages/ai exec vitest --config vitest.node.config.js --run \
+            src/generate-video/core-video-operation-deadline.test.ts \
+            src/generate-video/generate-video.test.ts
       - name: Publish clean candidate head
         run: |
-          rm .github/workflows/build-core-video-operation-deadline.yml
-          rm .github/workflows/materialize-core-video-deadline-pr.yml
+          rm -f .github/workflows/build-core-video-operation-deadline.yml
+          rm -f .github/workflows/materialize-core-video-deadline-pr.yml
+          rm -f .github/workflows/repair-core-video-deadline-controller.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add packages/ai/src/generate-video/generate-video.ts \
+          git add -A -- \
+            packages/ai/src/generate-video/generate-video.ts \
             packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
             .changeset/quiet-snails-own.md \
             .github/workflows/build-core-video-operation-deadline.yml \
-            .github/workflows/materialize-core-video-deadline-pr.yml
+            .github/workflows/materialize-core-video-deadline-pr.yml \
+            .github/workflows/repair-core-video-deadline-controller.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
           git commit -m "fix(ai): make video polling timeout authoritative"
+          git pull --rebase origin fix/core-video-operation-deadline
           git push origin HEAD:fix/core-video-operation-deadline
