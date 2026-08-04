@@ -101,7 +101,8 @@ jobs:
           set -euo pipefail
           rm -f .github/fieldwork/materialize-mcp-retryable-http.py
           rm -f .github/workflows/fieldwork-mcp-retryable-http.yml
-          git diff --name-only "$SOURCE_BASE" | sort > /tmp/actual
+          git add -A
+          git diff --cached --name-only "$SOURCE_BASE" | sort > /tmp/actual
           cat > /tmp/expected <<'EOF'
           .changeset/retry-inbound-sse-http.md
           packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts
@@ -110,6 +111,5 @@ jobs:
           diff -u /tmp/expected /tmp/actual
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
           git commit -m "fix(mcp): retry transient inbound SSE HTTP failures"
           git push origin HEAD:repair/mcp-inbound-sse-retryable-http
