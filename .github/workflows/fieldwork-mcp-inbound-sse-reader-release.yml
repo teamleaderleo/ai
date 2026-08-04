@@ -18,6 +18,7 @@ concurrency:
 
 env:
   SOURCE_HEAD: c26e29ff39b414e368526afa9eb4cc3d1230a84a
+  MATERIALIZER_REF: origin/execution/mcp-inbound-sse-reader-release
 
 jobs:
   focused:
@@ -47,7 +48,10 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
 
       - name: Materialize bounded reader-release repair
-        run: python3 .github/fieldwork/materialize-mcp-reader-release.py
+        run: |
+          git show \
+            "$MATERIALIZER_REF:.github/fieldwork/materialize-mcp-reader-release.py" \
+            | python3 -
 
       - name: Format candidate files
         run: |
