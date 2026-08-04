@@ -32,7 +32,9 @@ jobs:
       - name: Install workspace
         run: pnpm install --frozen-lockfile
       - name: Materialize candidate
-        run: python .github/scripts/materialize-core-video-operation-deadline.py
+        run: |
+          python .github/scripts/materialize-core-video-operation-deadline.py
+          python .github/scripts/refine-core-video-operation-deadline.py
       - name: Format candidate
         run: |
           pnpm exec oxfmt \
@@ -52,6 +54,7 @@ jobs:
           rm -f .github/workflows/materialize-core-video-deadline-pr.yml
           rm -f .github/workflows/repair-core-video-deadline-controller.yml
           rm -f .github/scripts/materialize-core-video-operation-deadline.py
+          rm -f .github/scripts/refine-core-video-operation-deadline.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A -- \
@@ -61,7 +64,8 @@ jobs:
             .github/workflows/build-core-video-operation-deadline.yml \
             .github/workflows/materialize-core-video-deadline-pr.yml \
             .github/workflows/repair-core-video-deadline-controller.yml \
-            .github/scripts/materialize-core-video-operation-deadline.py
+            .github/scripts/materialize-core-video-operation-deadline.py \
+            .github/scripts/refine-core-video-operation-deadline.py
           if git diff --cached --quiet; then
             exit 0
           fi
