@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fieldwork-mcp-inbound-sse-reader-release
@@ -22,6 +22,7 @@ env:
 
 jobs:
   focused:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.base.sha == 'c26e29ff39b414e368526afa9eb4cc3d1230a84a'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -30,7 +31,6 @@ jobs:
         with:
           ref: ${{ env.SOURCE_HEAD }}
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -93,3 +93,13 @@ jobs:
           )
           test "${changed[*]}" = "${expected[*]}"
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+
+      - name: Publish validated source and tests
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts
+          git commit -m 'fix(mcp): release inbound SSE reader locks'
+          git push origin HEAD:fieldwork/mcp-inbound-sse-lifecycle-repair
