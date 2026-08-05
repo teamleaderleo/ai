@@ -192,7 +192,10 @@ describe('streamText explicit abort races', () => {
 
   it('settles public abort results while pre-registration provider cancellation is pending', async () => {
     const abortController = new AbortController();
-    const abortReason = new DOMException('pending provider cancel', 'AbortError');
+    const abortReason = new DOMException(
+      'pending provider cancel',
+      'AbortError',
+    );
     const releaseProviderCancel = deferred<void>();
     const providerCancel = vi.fn(() => releaseProviderCancel.promise);
     const onAbort = vi.fn();

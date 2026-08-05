@@ -828,12 +828,6 @@ export type EnrichedStreamPart<TOOLS extends ToolSet, PARTIAL_OUTPUT> = {
   partialOutput: PARTIAL_OUTPUT | undefined;
 };
 
-async function markPromiseAsHandled<T>(promise: Promise<T>): Promise<void> {
-  try {
-    await promise;
-  } catch {}
-}
-
 function createOutputTransformStream<
   TOOLS extends ToolSet,
   OUTPUT extends Output,
@@ -2535,8 +2529,10 @@ class DefaultStreamTextResult<
       }
 
       await telemetryDispatcher.onError?.({ callId, error });
+      const initialResponseMessagesPromise =
+        self._initialResponseMessages.promise;
+      void initialResponseMessagesPromise.catch(() => {});
       self._initialResponseMessages.reject(error);
-      markPromiseAsHandled(self._initialResponseMessages.promise);
 
       // add an error stream part and close the streams:
       self.addStream(
@@ -2731,8 +2727,9 @@ class DefaultStreamTextResult<
     error: unknown;
   }) {
     if (delayedPromise.isPending()) {
+      const promise = delayedPromise.promise;
+      void promise.catch(() => {});
       delayedPromise.reject(error);
-      markPromiseAsHandled(delayedPromise.promise);
     }
   }
 
