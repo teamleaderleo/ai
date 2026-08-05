@@ -285,7 +285,7 @@ export async function experimental_generateVideo({
     `ai/${VERSION}`,
   );
 
-  const { retry } = prepareRetries({
+  const { maxRetries, retry } = prepareRetries({
     maxRetries: maxRetriesArg,
     abortSignal,
   });
@@ -408,6 +408,7 @@ export async function experimental_generateVideo({
           poll,
           webhook,
           retry,
+          maxRetries,
         });
       }
 
@@ -522,12 +523,14 @@ async function executeStartStatusFlow({
   poll: pollConfig,
   webhook: webhookFactory,
   retry,
+  maxRetries,
 }: {
   model: Experimental_VideoModelV4;
   callOptions: Experimental_VideoModelV4CallOptions;
   poll?: GenerateVideoPollOptions;
   webhook?: GenerateVideoWebhookFactory;
   retry: <OUTPUT>(fn: () => PromiseLike<OUTPUT>) => PromiseLike<OUTPUT>;
+  maxRetries: number;
 }): Promise<Experimental_VideoModelV4Result> {
   // 1. If webhook and provider supports it, set up the webhook
   const earlyWarnings: Experimental_VideoModelV4Result['warnings'] = [];
@@ -553,7 +556,8 @@ async function executeStartStatusFlow({
     }
   }
 
-  // 2. Start the generation
+  // 2. Start the generation. The local operation deadline begins only after
+  // the provider has accepted the remote job.
   const startResult = await retry(() =>
     model.doStart!({
       ...callOptions,
@@ -570,70 +574,219 @@ async function executeStartStatusFlow({
   const timeoutMs = pollConfig?.timeoutMs ?? 600_000;
   const delay = pollConfig?.delay ?? defaultDelay;
   const startTime = Date.now();
+  const deadline = createOperationDeadline({
+    timeoutMs,
+    abortSignal: callOptions.abortSignal,
+    startTime,
+  });
 
-  if (webhookReceived != null) {
-    // 3a. Webhook flow: wait for webhook, then get final status
-    await waitForWebhook({
-      received: webhookReceived,
-      timeoutMs,
-      abortSignal: callOptions.abortSignal,
-      delay,
-    });
-  }
+  // Preserve the provider-facing caller signal when present. When the caller
+  // supplies no signal, the local deadline signal enables cooperative
+  // cancellation in addition to the authoritative outer race.
+  const statusAbortSignal = callOptions.abortSignal ?? deadline.signal;
+  const retryAbortSignal = deadline.retrySignal;
+  const pollingDelayAbortSignal =
+    pollConfig?.delay == null ? retryAbortSignal : callOptions.abortSignal;
+  const { retry: retryStatus } = prepareRetries({
+    maxRetries,
+    abortSignal: retryAbortSignal,
+  });
 
-  while (true) {
-    if (webhookReceived == null) {
-      // 3b. Polling flow (also used when webhooks are not supported)
-      const elapsedMs = Date.now() - startTime;
-      if (elapsedMs >= timeoutMs) {
-        throw new Error(`Video generation timed out after ${timeoutMs}ms.`);
-      }
-      await delay(Math.min(intervalMs, timeoutMs - elapsedMs), {
-        abortSignal: callOptions.abortSignal,
-      });
-      if (Date.now() - startTime >= timeoutMs) {
-        throw new Error(`Video generation timed out after ${timeoutMs}ms.`);
-      }
-    }
-
-    const statusResult = await retry(() =>
-      model.doStatus!({
-        operation: startResult.operation,
-        abortSignal: callOptions.abortSignal,
-        headers: callOptions.headers,
-      }),
-    );
-
-    if (statusResult.status === 'error') {
-      throw new Error(statusResult.error);
-    }
-
-    if (statusResult.warnings != null) {
-      allWarnings.push(...statusResult.warnings);
-    }
-    if (statusResult.providerMetadata != null) {
-      operationProviderMetadata ??= {};
-      mergeProviderMetadata(
-        operationProviderMetadata,
-        statusResult.providerMetadata,
-      );
-    }
-
-    if (statusResult.status === 'completed') {
-      return {
-        videos: statusResult.videos,
-        warnings: allWarnings,
-        providerMetadata: operationProviderMetadata,
-        response: statusResult.response,
-      };
-    }
-
+  try {
     if (webhookReceived != null) {
-      throw new Error(
-        'Video generation did not complete after webhook notification.',
+      // 3a. Preserve the configured webhook wait implementation while the
+      // operation deadline also fences the final status call.
+      await deadline.race(
+        waitForWebhook({
+          received: webhookReceived,
+          timeoutMs,
+          abortSignal: retryAbortSignal,
+          delay,
+        }),
       );
     }
+
+    while (true) {
+      if (webhookReceived == null) {
+        // 3b. Polling flow (also used when webhooks are not supported).
+        const elapsedMs = Date.now() - startTime;
+        deadline.assertActive();
+        await deadline.race(
+          delay(Math.min(intervalMs, Math.max(0, timeoutMs - elapsedMs)), {
+            abortSignal: pollingDelayAbortSignal,
+          }),
+        );
+        deadline.assertActive();
+      }
+
+      deadline.assertActive();
+      const statusResult = await deadline.race(
+        retryStatus(() =>
+          model.doStatus!({
+            operation: startResult.operation,
+            abortSignal: statusAbortSignal,
+            headers: callOptions.headers,
+          }),
+        ),
+      );
+      deadline.assertActive();
+
+      if (statusResult.status === 'error') {
+        throw new Error(statusResult.error);
+      }
+
+      if (statusResult.warnings != null) {
+        allWarnings.push(...statusResult.warnings);
+      }
+      if (statusResult.providerMetadata != null) {
+        operationProviderMetadata ??= {};
+        mergeProviderMetadata(
+          operationProviderMetadata,
+          statusResult.providerMetadata,
+        );
+      }
+
+      if (statusResult.status === 'completed') {
+        return {
+          videos: statusResult.videos,
+          warnings: allWarnings,
+          providerMetadata: operationProviderMetadata,
+          response: statusResult.response,
+        };
+      }
+
+      if (webhookReceived != null) {
+        throw new Error(
+          'Video generation did not complete after webhook notification.',
+        );
+      }
+    }
+  } finally {
+    deadline.dispose();
   }
+}
+
+function createOperationDeadline({
+  timeoutMs,
+  abortSignal,
+  startTime,
+}: {
+  timeoutMs: number;
+  abortSignal?: AbortSignal;
+  startTime: number;
+}) {
+  const timeoutError = new Error(
+    `Video generation timed out after ${timeoutMs}ms.`,
+  );
+  const deadlineAt = startTime + timeoutMs;
+  const deadlineController =
+    typeof globalThis.AbortController === 'function'
+      ? new globalThis.AbortController()
+      : undefined;
+  const signal = deadlineController?.signal;
+  const retrySignal =
+    signal == null
+      ? abortSignal
+      : abortSignal == null
+        ? signal
+        : mergeAbortSignals(abortSignal, signal);
+  let expired = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const abortDeadline = (): void => {
+    expired = true;
+    if (deadlineController?.signal.aborted === false) {
+      deadlineController.abort(timeoutError);
+    }
+  };
+
+  const throwTimeout = (): never => {
+    abortDeadline();
+    throw timeoutError;
+  };
+
+  const assertActive = (): void => {
+    if (expired || !(Date.now() < deadlineAt)) {
+      throwTimeout();
+    }
+  };
+
+  const timeoutPromise: Promise<never> =
+    deadlineAt === Number.POSITIVE_INFINITY
+      ? new Promise<never>(() => {})
+      : new Promise<never>((_, reject) => {
+          const schedule = () => {
+            const remainingMs = deadlineAt - Date.now();
+            if (!(remainingMs > 0)) {
+              abortDeadline();
+              reject(timeoutError);
+              return;
+            }
+            timeoutId = setTimeout(
+              schedule,
+              Math.min(remainingMs, 2_147_483_647),
+            );
+          };
+          schedule();
+        });
+
+  // Promise.race adopts losing operations. This handler also covers a
+  // zero-duration deadline before the first race is installed.
+  void timeoutPromise.catch(() => {});
+
+  let removeCallerAbortListener: (() => void) | undefined;
+  const callerAbortPromise: Promise<never> =
+    abortSignal == null
+      ? new Promise<never>(() => {})
+      : new Promise<never>((_, reject) => {
+          const rejectForAbort = () => {
+            reject(
+              abortSignal.reason ?? new DOMException('Aborted', 'AbortError'),
+            );
+          };
+
+          if (abortSignal.aborted) {
+            rejectForAbort();
+            return;
+          }
+
+          abortSignal.addEventListener('abort', rejectForAbort, { once: true });
+          removeCallerAbortListener = () => {
+            abortSignal.removeEventListener('abort', rejectForAbort);
+          };
+        });
+  void callerAbortPromise.catch(() => {});
+
+  return {
+    signal,
+    retrySignal,
+    assertActive,
+    async race<T>(operation: PromiseLike<T>): Promise<T> {
+      try {
+        const result = await Promise.race([
+          Promise.resolve(operation),
+          timeoutPromise,
+          callerAbortPromise,
+        ]);
+        assertActive();
+        return result;
+      } catch (error) {
+        if (expired || !(Date.now() < deadlineAt)) {
+          throwTimeout();
+        }
+        if (abortSignal?.aborted) {
+          throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
+        }
+        throw error;
+      }
+    },
+    dispose(): void {
+      if (timeoutId != null) {
+        clearTimeout(timeoutId);
+      }
+      removeCallerAbortListener?.();
+    },
+  };
 }
 
 async function waitForWebhook({
@@ -650,8 +803,6 @@ async function waitForWebhook({
     options?: { abortSignal?: AbortSignal },
   ) => PromiseLike<void>;
 }) {
-  // Cancel the timeout delay once the webhook arrives (or we abort/time out),
-  // so its timer does not keep the event loop alive on the success path.
   const timeoutController =
     typeof globalThis.AbortController === 'function'
       ? new globalThis.AbortController()
