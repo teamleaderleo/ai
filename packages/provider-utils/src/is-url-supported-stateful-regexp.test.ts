@@ -68,4 +68,19 @@ describe('isUrlSupported with stateful regular expressions', () => {
     ).toBe(false);
     expect(pattern.lastIndex).toBe(5);
   });
+
+  it('preserves frozen non-stateful regexp behavior', () => {
+    const pattern = /https:\/\/example\.com\/asset/;
+    pattern.lastIndex = 5;
+    Object.freeze(pattern);
+
+    expect(
+      isUrlSupported({
+        mediaType: 'image/png',
+        url,
+        supportedUrls: { 'image/*': [pattern] },
+      }),
+    ).toBe(true);
+    expect(pattern.lastIndex).toBe(5);
+  });
 });
