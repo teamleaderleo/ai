@@ -17,6 +17,8 @@ jobs:
     if: github.event.pull_request.head.ref == 'fix/core-video-operation-deadline-1bec'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      SOURCE_BASE: 1bec07d118baccb985f893e96ea0a1860063f4dc
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,25 +60,46 @@ jobs:
             src/generate-video/core-video-operation-deadline.test.ts \
             src/generate-video/generate-video.test.ts
 
-      - name: Verify clean three-file product fence
+      - name: Verify materialized source worktree
         run: |
+          set -euo pipefail
           git diff --check
           mapfile -t changed < <(git status --short | sed 's/^...//' | sort)
           expected=(
-            .github/scripts/apply-core-video-abort-arbitration.py
-            .github/workflows/apply-core-video-abort-arbitration.yml
             packages/ai/src/generate-video/core-video-operation-deadline.test.ts
             packages/ai/src/generate-video/generate-video.ts
           )
+          printf 'materialized files:\n%s\n' "${changed[*]}"
           test "${changed[*]}" = "${expected[*]}"
 
       - name: Publish corrected product head
         run: |
+          set -euo pipefail
           rm .github/scripts/apply-core-video-abort-arbitration.py
           rm .github/workflows/apply-core-video-abort-arbitration.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = "packages/ai/src/generate-video/core-video-operation-deadline.test.ts packages/ai/src/generate-video/generate-video.ts "
+
+          mapfile -t staged < <(git diff --cached --name-only | sort)
+          expected_commit=(
+            .github/scripts/apply-core-video-abort-arbitration.py
+            .github/workflows/apply-core-video-abort-arbitration.yml
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts
+            packages/ai/src/generate-video/generate-video.ts
+          )
+          printf 'publication commit files:\n%s\n' "${staged[*]}"
+          test "${staged[*]}" = "${expected_commit[*]}"
+
           git commit -m "fix(ai): preserve caller abort authority during video polling"
+
+          mapfile -t final < <(git diff --name-only "$SOURCE_BASE"..HEAD | sort)
+          expected_product=(
+            .changeset/quiet-snails-own.md
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts
+            packages/ai/src/generate-video/generate-video.ts
+          )
+          printf 'final product files:\n%s\n' "${final[*]}"
+          test "${final[*]}" = "${expected_product[*]}"
+
           git push origin HEAD:fix/core-video-operation-deadline-1bec
