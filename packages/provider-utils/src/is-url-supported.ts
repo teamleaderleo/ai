@@ -55,6 +55,10 @@ export function isUrlSupported({
 }
 
 function testRegExpStatelessly(pattern: RegExp, value: string): boolean {
+  if (!pattern.global && !pattern.sticky) {
+    return pattern.test(value);
+  }
+
   const previousLastIndex = pattern.lastIndex;
 
   try {
