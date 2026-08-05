@@ -1,0 +1,105 @@
+name: Fieldwork streaming speech abort authority
+
+on:
+  pull_request:
+    branches:
+      - research/base-main-fbb154a
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    if: github.event.pull_request.head.ref == 'research/streaming-speech-abort-authority'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/streaming-speech-abort-authority
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build AI package dependency closure
+        run: pnpm turbo build --filter=ai...
+
+      - name: Prove current source misses local caller-abort settlement
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path('packages/ai/src/transcribe/stream-transcribe-abort-authority.test.ts'),
+              Path('packages/ai/src/translate/stream-translate-abort-authority.test.ts'),
+          ]
+          for path in paths:
+              text = path.read_text()
+              if text.count('it.fails(') != 1:
+                  raise SystemExit(f'expected one it.fails control in {path}')
+              path.write_text(text.replace('it.fails(', 'it(', 1))
+          PY
+
+          set +e
+          NO_COLOR=1 pnpm --filter ai exec vitest \
+            --config vitest.node.config.js --run --reporter=verbose \
+            src/transcribe/stream-transcribe-abort-authority.test.ts \
+            src/translate/stream-translate-abort-authority.test.ts \
+            2>&1 | tee /tmp/streaming-speech-abort-baseline.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          test "$status" -ne 0
+          grep -F "caller abort settles transcription result promises" /tmp/streaming-speech-abort-baseline.log
+          grep -F "caller abort settles translation result promises" /tmp/streaming-speech-abort-baseline.log
+          grep -F "timed-out" /tmp/streaming-speech-abort-baseline.log
+
+          git checkout -- \
+            packages/ai/src/transcribe/stream-transcribe-abort-authority.test.ts \
+            packages/ai/src/translate/stream-translate-abort-authority.test.ts
+
+      - name: Run committed expected-failure controls in Node
+        run: |
+          pnpm --filter ai exec vitest \
+            --config vitest.node.config.js --run \
+            src/transcribe/stream-transcribe-abort-authority.test.ts \
+            src/translate/stream-translate-abort-authority.test.ts
+
+      - name: Run committed expected-failure controls in Edge
+        run: |
+          pnpm --filter ai exec vitest \
+            --config vitest.edge.config.js --run \
+            src/transcribe/stream-transcribe-abort-authority.test.ts \
+            src/translate/stream-translate-abort-authority.test.ts
+
+      - name: Run AI package type check
+        run: pnpm --filter ai type-check
+
+      - name: Verify formatting and exact test-only fence
+        run: |
+          pnpm exec prettier --check \
+            packages/ai/src/transcribe/stream-transcribe-abort-authority.test.ts \
+            packages/ai/src/translate/stream-translate-abort-authority.test.ts \
+            .github/workflows/fieldwork-streaming-speech-abort-authority.yml
+          git diff --check
+          mapfile -t changed < <(git diff --name-only fbb154a00008375c46b7bcc1a6dde8ae5eef2f8d..HEAD | sort)
+          expected=(
+            .github/workflows/fieldwork-streaming-speech-abort-authority.yml
+            packages/ai/src/transcribe/stream-transcribe-abort-authority.test.ts
+            packages/ai/src/translate/stream-translate-abort-authority.test.ts
+          )
+          test "${changed[*]}" = "${expected[*]}"
