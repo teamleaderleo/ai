@@ -774,6 +774,9 @@ function createOperationDeadline({
         if (expired || !(Date.now() < deadlineAt)) {
           throwTimeout();
         }
+        if (abortSignal?.aborted) {
+          throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
+        }
         throw error;
       }
     },

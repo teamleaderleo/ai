@@ -409,4 +409,41 @@ describe('generateVideo operation deadline', () => {
 
     await expect(result).rejects.toBe(callerReason);
   });
+
+  it('preserves the caller abort reason when cooperative work rejects generically', async () => {
+    const controller = new AbortController();
+    const callerReason = new DOMException('Caller stopped', 'AbortError');
+    let markStatusStarted!: () => void;
+    const statusStarted = new Promise<void>(resolve => {
+      markStatusStarted = resolve;
+    });
+
+    const result = experimental_generateVideo({
+      model: new MockVideoModelV4({
+        doGenerate: undefined,
+        doStart: async () => startResult(),
+        doStatus: ({ abortSignal }) =>
+          new Promise<never>((_resolve, reject) => {
+            markStatusStarted();
+            abortSignal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Transport stopped', 'AbortError')),
+              { once: true },
+            );
+          }),
+      }),
+      prompt: 'caller abort arbitration test',
+      abortSignal: controller.signal,
+      poll: {
+        intervalMs: 0,
+        timeoutMs: 1_000,
+        delay: async () => {},
+      },
+    });
+
+    await statusStarted;
+    controller.abort(callerReason);
+
+    await expect(result).rejects.toBe(callerReason);
+  });
 });
