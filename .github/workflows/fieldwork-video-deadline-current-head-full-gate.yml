@@ -1,0 +1,68 @@
+name: Fieldwork video deadline current-head full gate
+
+on:
+  pull_request:
+    branches:
+      - fix/core-video-operation-deadline-1bec
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-video-deadline-current-head-full-gate
+  cancel-in-progress: true
+
+env:
+  SOURCE_HEAD: 5fa70d44a06c2f84f03ae3c5c98326a72a0500e9
+
+jobs:
+  ai-package:
+    if: github.event.pull_request.head.ref == 'execution/video-deadline-current-head-full-gate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+
+      - name: Install locked workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build AI package dependency closure
+        run: pnpm turbo build --filter=ai...
+
+      - name: Run complete AI Node and Edge suites
+        run: pnpm --filter ai test
+
+      - name: Run package type check
+        if: matrix.node == 22
+        run: pnpm --filter ai type-check
+
+      - name: Verify exact candidate formatting and source identity
+        run: |
+          pnpm exec oxfmt --check \
+            packages/ai/src/generate-video/generate-video.ts \
+            packages/ai/src/generate-video/core-video-operation-deadline.test.ts \
+            .changeset/quiet-snails-own.md
+          git diff --check
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
