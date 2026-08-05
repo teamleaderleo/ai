@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fieldwork-explicit-abort-rejection-ownership
@@ -18,6 +18,7 @@ concurrency:
 
 env:
   SOURCE_HEAD: 1413abfbbc6fc1ea0683d30613052e26c2b1ce51
+  SOURCE_BRANCH: fieldwork/explicit-abort-terminal-settlement-repair
   MATERIALIZER_REF: origin/execution/explicit-abort-rejection-ownership
 
 jobs:
@@ -101,3 +102,52 @@ jobs:
           )
           test "${changed[*]}" = "${expected[*]}"
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+
+  publish:
+    needs: focused
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out canonical source branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Verify unchanged canonical source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Materialize and format validated repair
+        run: |
+          git show \
+            "$MATERIALIZER_REF:.github/fieldwork/materialize-explicit-abort-rejection-ownership.py" \
+            | python3 -
+          pnpm exec prettier --write \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          git diff --check
+
+      - name: Publish exact three-file candidate
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = "packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts packages/ai/src/generate-text/stream-text.ts "
+          git commit -m "fix(ai): observe abort result rejections before settlement"
+          git push origin "HEAD:$SOURCE_BRANCH"
