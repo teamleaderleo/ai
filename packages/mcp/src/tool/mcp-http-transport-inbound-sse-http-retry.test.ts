@@ -14,6 +14,8 @@ function getSseErrors(errors: unknown[]): Error[] {
   );
 }
 
+// These controls deliberately exercise the transport's existing bounded
+// reconnect owner rather than introducing a second HTTP-specific retry loop.
 describe('HttpMCPTransport inbound SSE retryable HTTP failures', () => {
   beforeEach(() => {
     vi.useFakeTimers();
