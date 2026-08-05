@@ -572,6 +572,16 @@ export class HttpMCPTransport implements MCPTransport {
           statusCode: response.status,
           url: this.url.href,
         });
+        if (
+          response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500
+        ) {
+          // Route transient HTTP failures through the same bounded reconnect
+          // owner as thrown network failures. Permanent responses remain
+          // terminal for this optional inbound channel.
+          throw error;
+        }
         this.onerror?.(error);
         return;
       }
