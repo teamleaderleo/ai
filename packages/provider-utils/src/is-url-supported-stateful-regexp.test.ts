@@ -69,6 +69,24 @@ describe('isUrlSupported with stateful regular expressions', () => {
     expect(pattern.lastIndex).toBe(5);
   });
 
+  it('restores caller-owned state when evaluation throws', () => {
+    const pattern = /https:\/\/example\.com\/asset/g;
+    pattern.lastIndex = 5;
+    pattern.exec = () => {
+      pattern.lastIndex = 12;
+      throw new Error('test error');
+    };
+
+    expect(() =>
+      isUrlSupported({
+        mediaType: 'image/png',
+        url,
+        supportedUrls: { 'image/*': [pattern] },
+      }),
+    ).toThrow('test error');
+    expect(pattern.lastIndex).toBe(5);
+  });
+
   it('preserves frozen non-stateful regexp behavior', () => {
     const pattern = /https:\/\/example\.com\/asset/;
     pattern.lastIndex = 5;
