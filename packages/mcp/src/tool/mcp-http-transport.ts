@@ -640,21 +640,29 @@ export class HttpMCPTransport implements MCPTransport {
           shouldCancelReader = true;
           this.onerror?.(error);
         } finally {
-          if (this.inboundSseConnection === connection) {
-            const reconnect =
-              shouldReconnect && !this.abortController?.signal.aborted;
-            if (shouldCancelReader) {
-              // Release an errored reader now rather than retaining a stale
-              // connection until transport.close(). Cancellation failures remain
-              // observable through the existing connection close handler.
-              connection.close();
+          try {
+            if (this.inboundSseConnection === connection) {
+              const reconnect =
+                shouldReconnect && !this.abortController?.signal.aborted;
+              if (shouldCancelReader) {
+                // Release an errored reader now rather than retaining a stale
+                // connection until transport.close(). Cancellation failures remain
+                // observable through the existing connection close handler.
+                connection.close();
+              }
+              this.inboundSseConnection = undefined;
+              if (reconnect) {
+                // A successfully opened stream starts a fresh sequence of failed
+                // reopen attempts. This allows protocol polling to continue across
+                // repeated clean server closures.
+                this.scheduleInboundSseReconnection();
+              }
             }
-            this.inboundSseConnection = undefined;
-            if (reconnect) {
-              // A successfully opened stream starts a fresh sequence of failed
-              // reopen attempts. This allows protocol polling to continue across
-              // repeated clean server closures.
-              this.scheduleInboundSseReconnection();
+          } finally {
+            try {
+              reader.releaseLock();
+            } catch {
+              // Reader cleanup must not replace the selected stream outcome.
             }
           }
         }
