@@ -61,6 +61,7 @@ export function createStitchableStream<T>(): {
 
       if (done) {
         // Case 3: Current inner stream is done
+        currentStream.reader.releaseLock();
         innerStreams.shift(); // Remove the finished stream
 
         if (innerStreams.length === 0 && isClosed) {
