@@ -51,28 +51,28 @@ jobs:
           path = Path('packages/mcp/src/tool/mcp-http-transport.ts')
           text = path.read_text()
           old = '''        const error = new MCPClientError({
-                    message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
-                    statusCode: response.status,
-                    url: this.url.href,
-                  });
-                  this.onerror?.(error);
-                  return;'''
+            message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
+            statusCode: response.status,
+            url: this.url.href,
+          });
+          this.onerror?.(error);
+          return;'''
           new = '''        const error = new MCPClientError({
-                    message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
-                    statusCode: response.status,
-                    url: this.url.href,
-                  });
-                  if (
-                    response.status === 408 ||
-                    response.status === 429 ||
-                    response.status >= 500
-                  ) {
-                    // Route statuses selected by retry policy through the same bounded
-                    // reconnect owner as thrown network failures.
-                    throw error;
-                  }
-                  this.onerror?.(error);
-                  return;'''
+            message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
+            statusCode: response.status,
+            url: this.url.href,
+          });
+          if (
+            response.status === 408 ||
+            response.status === 429 ||
+            response.status >= 500
+          ) {
+            // Route statuses selected by retry policy through the same bounded
+            // reconnect owner as thrown network failures.
+            throw error;
+          }
+          this.onerror?.(error);
+          return;'''
           if text.count(old) != 1:
               raise SystemExit(f'expected one inbound GET error block, found {text.count(old)}')
           path.write_text(text.replace(old, new))
