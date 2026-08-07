@@ -1,0 +1,78 @@
+name: Fieldwork MCP HTTP retry adjacency gate
+
+on:
+  pull_request:
+    branches:
+      - repair/mcp-inbound-sse-retryable-http
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  adjacency:
+    if: github.event.pull_request.head.ref == 'execution/mcp-http-retry-adjacency-gate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 26]
+    env:
+      SOURCE_SHA: 27f890c297a14b7d13277d58f22698bde406a261
+    steps:
+      - name: Check out immutable accepted source
+        uses: actions/checkout@v4
+        with:
+          ref: 27f890c297a14b7d13277d58f22698bde406a261
+          fetch-depth: 1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install locked workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact source identity
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Build package workspace
+        run: pnpm run build:packages
+
+      - name: Run MCP retry and adjacent lifecycle controls under Node
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.node.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts \
+            src/tool/mcp-http-transport.test.ts
+
+      - name: Run MCP retry and adjacent lifecycle controls under Edge
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.edge.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts \
+            src/tool/mcp-http-transport.test.ts
+
+      - name: Run MCP package typecheck
+        if: matrix.node == 22
+        run: pnpm -C packages/mcp type-check
+
+      - name: Run repository formatting gate
+        if: matrix.node == 22
+        run: pnpm exec ultracite check
+
+      - name: Prove source remained immutable
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
