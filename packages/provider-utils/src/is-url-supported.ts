@@ -49,22 +49,24 @@ export function isUrlSupported({
         return mediaType.startsWith(mediaTypePrefix);
       })
       .flatMap(({ regexes }) => regexes)
-      // check if any pattern matches the url without retaining RegExp state:
-      .some(pattern => testRegExpStatelessly(pattern, url))
+      // check if any pattern matches the url:
+      .some(pattern => testRegExpFromStart(pattern, url))
   );
 }
 
-function testRegExpStatelessly(pattern: RegExp, value: string): boolean {
+function testRegExpFromStart(pattern: RegExp, value: string): boolean {
   if (!pattern.global && !pattern.sticky) {
     return pattern.test(value);
   }
 
-  const previousLastIndex = pattern.lastIndex;
+  // Global and sticky regexes retain match state in lastIndex.
+  // Evaluate from the start without changing caller-owned state.
+  const lastIndex = pattern.lastIndex;
+  pattern.lastIndex = 0;
 
   try {
-    pattern.lastIndex = 0;
     return pattern.test(value);
   } finally {
-    pattern.lastIndex = previousLastIndex;
+    pattern.lastIndex = lastIndex;
   }
 }
