@@ -7,7 +7,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "pnpm clean && tsup --tsconfig tsconfig.build.json",
+    "build": "pnpm clean && tsup --tsconfig tsconfig.build.json && vitest --config vitest.config.js --run src/use-object-async-on-finish.ui.test.tsx",
     "build:watch": "pnpm clean && tsup --watch --tsconfig tsconfig.build.json",
     "clean": "del-cli dist *.tsbuildinfo",
     "type-check": "tsc --build",
