@@ -1,0 +1,149 @@
+name: Fieldwork MCP HTTP retry sibling publish
+
+on:
+  pull_request:
+    branches:
+      - split/mcp-inbound-sse-http-retry-c26
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: github.event.pull_request.head.ref == 'execution/mcp-http-retry-sibling-publish'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SOURCE_SHA: bcb8741b5ab979d88b7411b65474464036e9fc4e
+      BASE_SHA: c26e29ff39b414e368526afa9eb4cc3d1230a84a
+      PRODUCT_BRANCH: split/mcp-inbound-sse-http-retry-c26
+    steps:
+      - name: Check out exact product candidate
+        uses: actions/checkout@v4
+        with:
+          ref: bcb8741b5ab979d88b7411b65474464036e9fc4e
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact pre-publication identity
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Materialize retryable HTTP classification
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/mcp/src/tool/mcp-http-transport.ts')
+          text = path.read_text()
+          old = '''        const error = new MCPClientError({
+                    message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
+                    statusCode: response.status,
+                    url: this.url.href,
+                  });
+                  this.onerror?.(error);
+                  return;'''
+          new = '''        const error = new MCPClientError({
+                    message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
+                    statusCode: response.status,
+                    url: this.url.href,
+                  });
+                  if (
+                    response.status === 408 ||
+                    response.status === 429 ||
+                    response.status >= 500
+                  ) {
+                    // Route statuses selected by retry policy through the same bounded
+                    // reconnect owner as thrown network failures.
+                    throw error;
+                  }
+                  this.onerror?.(error);
+                  return;'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one inbound GET error block, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+
+      - name: Format exact product files
+        run: |
+          pnpm exec oxfmt --write \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts \
+            .changeset/retry-inbound-sse-http-split.md
+
+      - name: Verify exact product fence before tests
+        run: |
+          actual="$(git diff --name-only "$BASE_SHA" | sort)"
+          expected="$(printf '%s\n' \
+            '.changeset/retry-inbound-sse-http-split.md' \
+            'packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts' \
+            'packages/mcp/src/tool/mcp-http-transport.ts' | sort)"
+          test "$actual" = "$expected"
+          git diff --check "$BASE_SHA"
+
+      - name: Build package workspace
+        run: pnpm run build:packages
+
+      - name: Run focused retry and neighboring transport controls under Node
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.node.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            src/tool/mcp-http-transport.test.ts
+
+      - name: Run focused retry and neighboring transport controls under Edge
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.edge.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            src/tool/mcp-http-transport.test.ts
+
+      - name: Run MCP package typecheck
+        run: pnpm -C packages/mcp type-check
+
+      - name: Verify formatting and exact fence after tests
+        run: |
+          pnpm exec oxfmt --check \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts \
+            .changeset/retry-inbound-sse-http-split.md
+          actual="$(git diff --name-only "$BASE_SHA" | sort)"
+          expected="$(printf '%s\n' \
+            '.changeset/retry-inbound-sse-http-split.md' \
+            'packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts' \
+            'packages/mcp/src/tool/mcp-http-transport.ts' | sort)"
+          test "$actual" = "$expected"
+          git diff --check "$BASE_SHA"
+
+      - name: Publish only source delta to product branch
+        run: |
+          test "$(git diff --name-only | sort)" = 'packages/mcp/src/tool/mcp-http-transport.ts'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packages/mcp/src/tool/mcp-http-transport.ts
+          git commit -m 'fix(mcp): retry configured inbound SSE HTTP statuses'
+          git push origin "HEAD:$PRODUCT_BRANCH"
+
+      - name: Verify final product fence
+        run: |
+          actual="$(git diff --name-only "$BASE_SHA" HEAD | sort)"
+          expected="$(printf '%s\n' \
+            '.changeset/retry-inbound-sse-http-split.md' \
+            'packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry.test.ts' \
+            'packages/mcp/src/tool/mcp-http-transport.ts' | sort)"
+          test "$actual" = "$expected"
+          git diff --check "$BASE_SHA" HEAD
