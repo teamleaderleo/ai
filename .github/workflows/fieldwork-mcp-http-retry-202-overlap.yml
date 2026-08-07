@@ -1,0 +1,136 @@
+name: Fieldwork MCP HTTP retry 202 overlap
+
+on:
+  pull_request:
+    branches:
+      - research/base-main-a771
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    if: github.event.pull_request.head.ref == 'research/mcp-http-retry-202-overlap-a771'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out research head
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Materialize the naive standalone retry patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('packages/mcp/src/tool/mcp-http-transport.ts')
+          text = source.read_text()
+          old = """        const error = new MCPClientError({
+                  message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
+                  statusCode: response.status,
+                  url: this.url.href,
+                });
+                this.onerror?.(error);
+                return;
+          """
+          new = """        const error = new MCPClientError({
+                  message: `MCP HTTP Transport Error: GET SSE failed: ${response.status} ${response.statusText}`,
+                  statusCode: response.status,
+                  url: this.url.href,
+                });
+                if (
+                  response.status === 408 ||
+                  response.status === 429 ||
+                  response.status >= 500
+                ) {
+                  // Route retryable HTTP responses through the same bounded reconnect
+                  // path as thrown network failures. Permanent responses remain terminal.
+                  throw error;
+                }
+                this.onerror?.(error);
+                return;
+          """
+          if text.count(old) != 1:
+              raise SystemExit('expected one inbound HTTP error block')
+          source.write_text(text.replace(old, new))
+
+          test = Path('packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts')
+          test_text = test.read_text()
+          marker = "it.fails('retries a retryable inbound HTTP response after the existing delay'"
+          if test_text.count(marker) != 1:
+              raise SystemExit('expected one retry negative control')
+          test.write_text(test_text.replace(marker, "it('retries a retryable inbound HTTP response after the existing delay'"))
+          PY
+
+      - name: Format materialized discriminator
+        run: |
+          pnpm exec oxfmt \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts
+
+      - name: Build package workspace
+        run: pnpm run build:packages
+
+      - name: Prove the naive patch retries but duplicates after 202 under Node
+        run: |
+          set +e
+          FORCE_COLOR=0 pnpm -C packages/mcp exec vitest --config vitest.node.config.js --reporter=verbose --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts \
+            > /tmp/node-output.txt 2>&1
+          status=$?
+          set -e
+          cat /tmp/node-output.txt
+          test "$status" -ne 0
+          grep -F "retries a retryable inbound HTTP response after the existing delay" /tmp/node-output.txt
+          grep -F "lets a later 202 restart supersede any earlier retry schedule" /tmp/node-output.txt
+
+      - name: Prove the same interaction under Edge
+        run: |
+          set +e
+          FORCE_COLOR=0 pnpm -C packages/mcp exec vitest --config vitest.edge.config.js --reporter=verbose --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts \
+            > /tmp/edge-output.txt 2>&1
+          status=$?
+          set -e
+          cat /tmp/edge-output.txt
+          test "$status" -ne 0
+          grep -F "retries a retryable inbound HTTP response after the existing delay" /tmp/edge-output.txt
+          grep -F "lets a later 202 restart supersede any earlier retry schedule" /tmp/edge-output.txt
+
+      - name: Restore committed characterization
+        run: |
+          git checkout -- \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts
+
+      - name: Run committed baseline controls under Node and Edge
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.node.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts
+          pnpm -C packages/mcp exec vitest --config vitest.edge.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-http-retry-202-race.test.ts
+
+      - name: Run MCP typecheck and repository formatting
+        run: |
+          pnpm -C packages/mcp type-check
+          pnpm exec ultracite check
+
+      - name: Verify research-only fence
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
