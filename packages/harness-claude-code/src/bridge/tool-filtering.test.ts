@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createClaudeCode } from '../claude-code-harness';
 import {
   resolveInactiveNativeTools,
   resolveNativeTools,
@@ -38,5 +39,16 @@ describe('resolveInactiveNativeTools', () => {
         toolNames: ['bash', 'Workflow'],
       }),
     ).toEqual(['Bash', 'Workflow']);
+  });
+
+  it('keeps the allow-mode inactive complement in parity with declared built-ins', () => {
+    const harness = createClaudeCode();
+    const expectedNativeNames = Object.entries(harness.builtinTools)
+      .map(([publicName, builtin]) => builtin.nativeName ?? publicName)
+      .sort();
+
+    expect(
+      resolveInactiveNativeTools({ mode: 'allow', toolNames: [] }).sort(),
+    ).toEqual(expectedNativeNames);
   });
 });
