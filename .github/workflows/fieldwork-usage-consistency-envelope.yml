@@ -38,7 +38,7 @@ jobs:
       - name: OpenAI-compatible Edge tests after renewal
         run: pnpm -C packages/openai-compatible test:edge
       - name: Core aggregate/detail contract
-        run: pnpm -C packages/ai test:node -- usage-detail-contract.fieldwork.test.ts
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/types/usage-detail-contract.fieldwork.test.ts
       - name: Baseten type check
         run: pnpm -C packages/baseten type-check
       - name: Baseten Node tests
