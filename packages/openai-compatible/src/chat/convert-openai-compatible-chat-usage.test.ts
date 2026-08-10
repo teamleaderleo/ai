@@ -9,14 +9,15 @@ describe('convertOpenAICompatibleChatUsage', () => {
     );
   });
 
-  it('splits completion tokens into text and reasoning', () => {
-    expect(
-      convertOpenAICompatibleChatUsage({
-        prompt_tokens: 10,
-        completion_tokens: 20,
-        completion_tokens_details: { reasoning_tokens: 5 },
-      }),
-    ).toEqual({
+  it('preserves ordinary OpenAI-style completion accounting', () => {
+    const usage = {
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      total_tokens: 30,
+      completion_tokens_details: { reasoning_tokens: 5 },
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage)).toEqual({
       inputTokens: {
         total: 10,
         noCache: 10,
@@ -24,18 +25,14 @@ describe('convertOpenAICompatibleChatUsage', () => {
         cacheWrite: undefined,
       },
       outputTokens: { total: 20, text: 15, reasoning: 5 },
-      raw: {
-        prompt_tokens: 10,
-        completion_tokens: 20,
-        completion_tokens_details: { reasoning_tokens: 5 },
-      },
+      raw: usage,
     });
   });
 
-  it('clamps text tokens at 0 when reasoning exceeds completion', () => {
-    // Provider-inconsistent usage (Baseten Kimi-K3, finish_reason 'length'):
-    // completion_tokens undercounts the actual generation, so
-    // completion_tokens_details.reasoning_tokens > completion_tokens.
+  it('uses detailed or all-in counts as a floor when completion undercounts output', () => {
+    // Provider-inconsistent usage observed with Baseten Kimi-K3: the response
+    // says reasoning alone exceeds completion, while total_tokens agrees with
+    // prompt + reasoning.
     const usage = {
       prompt_tokens: 951,
       completion_tokens: 6000,
@@ -51,8 +48,56 @@ describe('convertOpenAICompatibleChatUsage', () => {
         cacheRead: 60,
         cacheWrite: undefined,
       },
-      outputTokens: { total: 6000, text: 0, reasoning: 6001 },
+      outputTokens: { total: 6001, text: 0, reasoning: 6001 },
       raw: usage,
+    });
+  });
+
+  it('does not lower a valid completion count when total_tokens undercounts it', () => {
+    const usage = {
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      total_tokens: 25,
+      completion_tokens_details: { reasoning_tokens: 5 },
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage).outputTokens).toEqual({
+      total: 20,
+      text: 15,
+      reasoning: 5,
+    });
+  });
+
+  it('can preserve unclassified output represented only by total_tokens', () => {
+    // xAI-style accounting is handled by its provider-specific convertUsage,
+    // but this control ensures the generic fallback does not publish an output
+    // total below the all-in response count if a compatible backend reports the
+    // same dialect.
+    const usage = {
+      prompt_tokens: 12,
+      completion_tokens: 1,
+      total_tokens: 241,
+      completion_tokens_details: { reasoning_tokens: 228 },
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage).outputTokens).toEqual({
+      total: 229,
+      text: 0,
+      reasoning: 228,
+    });
+  });
+
+  it('falls back to completion and reasoning when total_tokens is absent', () => {
+    const usage = {
+      prompt_tokens: 10,
+      completion_tokens: 4,
+      completion_tokens_details: { reasoning_tokens: 5 },
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage).outputTokens).toEqual({
+      total: 5,
+      text: 0,
+      reasoning: 5,
     });
   });
 });
