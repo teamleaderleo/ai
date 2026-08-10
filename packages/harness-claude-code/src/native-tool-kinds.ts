@@ -7,7 +7,9 @@ export type ClaudeCodeNativeToolKind = 'readonly' | 'edit' | 'bash';
  * decide whether an unresolved native tool call must enter the host approval
  * path. Keep aliases that can be emitted by supported Claude runtimes explicit.
  */
-export const CLAUDE_CODE_NATIVE_TOOL_KINDS = {
+export const CLAUDE_CODE_NATIVE_TOOL_KINDS: Readonly<
+  Record<string, ClaudeCodeNativeToolKind>
+> = {
   Read: 'readonly',
   Glob: 'readonly',
   Grep: 'readonly',
@@ -56,4 +58,4 @@ export const CLAUDE_CODE_NATIVE_TOOL_KINDS = {
   Bash: 'bash',
   Monitor: 'bash',
   PowerShell: 'bash',
-} as const satisfies Readonly<Record<string, ClaudeCodeNativeToolKind>>;
+};
