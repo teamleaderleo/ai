@@ -27,6 +27,8 @@ jobs:
           echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
           echo "source head: $source_head"
       - run: pnpm install --frozen-lockfile
+      - name: Build package dependencies before snapshot renewal
+        run: pnpm -C packages/openai-compatible type-check
       - name: Renew generated usage expectations
         run: pnpm -C packages/openai-compatible exec vitest --config vitest.node.config.js --run -u
       - name: Fence and materialize generated expectations
@@ -59,7 +61,7 @@ jobs:
           final_head="$(git rev-parse HEAD)"
           echo "FINAL_SOURCE_HEAD=$final_head" >> "$GITHUB_ENV"
           echo "final source head: $final_head"
-      - name: OpenAI-compatible type check
+      - name: OpenAI-compatible exact-head type check
         run: pnpm -C packages/openai-compatible type-check
       - name: OpenAI-compatible Node tests
         run: pnpm -C packages/openai-compatible test:node
