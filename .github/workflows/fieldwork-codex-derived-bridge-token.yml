@@ -1,0 +1,357 @@
+name: Fieldwork Codex derived bridge token
+
+on:
+  pull_request:
+    branches:
+      - candidate/codex-derived-bridge-token-current
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/codex-derived-bridge-token-current
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Capture source generation
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
+          echo "source head: $source_head"
+      - run: pnpm install --frozen-lockfile
+      - name: Materialize bounded Codex candidate
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/harness-codex/src/codex-harness.ts')
+          text = path.read_text()
+
+          if 'const resolveDerivedBridgeToken = (): string | undefined =>' not in text:
+              def replace_once(old: str, new: str) -> None:
+                  global text
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'expected one source match, found {count}: {old[:80]!r}')
+                  text = text.replace(old, new, 1)
+
+              replace_once(
+                  '  token: z.string(),\n  lastSeenEventId: z.number(),',
+                  '  token: z.string().optional(),\n  lastSeenEventId: z.number(),',
+              )
+
+              replace_once(
+                  '      const timeoutMs = settings.startupTimeoutMs ?? 120_000;\n',
+                  '''      const timeoutMs = settings.startupTimeoutMs ?? 120_000;\n      let derivedBridgeToken: string | undefined;\n      const resolveDerivedBridgeToken = (): string | undefined => {\n        if (settings.mintBridgeToken == null) return undefined;\n        if (derivedBridgeToken === undefined) {\n          derivedBridgeToken = settings.mintBridgeToken(sandboxId);\n        }\n        return derivedBridgeToken;\n      };\n''',
+              )
+
+              replace_once(
+                  '      if (coords) {\n        try {\n',
+                  '''      const attachToken =\n        coords == null\n          ? undefined\n          : (coords.token ?? resolveDerivedBridgeToken());\n      if (coords != null && attachToken == null) {\n        throw new HarnessCapabilityUnsupportedError({\n          harnessId: 'codex',\n          message:\n            'Codex live bridge resume state is missing its authentication token and deterministic minting is not configured.',\n        });\n      }\n\n      if (coords) {\n        try {\n''',
+              )
+
+              replace_once(
+                  '${encodeURIComponent(coords.token)}`;',
+                  '${encodeURIComponent(attachToken!)}`;',
+              )
+              replace_once(
+                  '            bridgeToken: coords.token,',
+                  '            bridgeToken: attachToken!,',
+              )
+              replace_once(
+                  '''      const token =\n        settings.mintBridgeToken == null\n          ? randomBytes(32).toString('hex')\n          : settings.mintBridgeToken(sandboxId);''',
+                  '''      const token =\n        settings.mintBridgeToken == null\n          ? randomBytes(32).toString('hex')\n          : resolveDerivedBridgeToken()!;''',
+              )
+
+              path.write_text(text)
+
+          test_path = Path(
+              'packages/harness-codex/src/codex-harness-derived-bridge-token.fieldwork.test.ts'
+          )
+          if not test_path.exists():
+              test_path.write_text(r'''import {
+  HarnessCapabilityUnsupportedError,
+  type HarnessV1NetworkSandboxSession,
+} from '@ai-sdk/harness';
+import { HarnessAgent } from '@ai-sdk/harness/agent';
+import type * as HarnessUtils from '@ai-sdk/harness/utils';
+import type * as NodeFsPromises from 'node:fs/promises';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createCodex } from './codex-harness';
+
+const channelOptions: unknown[] = [];
+const channelOpenInputs: unknown[] = [];
+let openFailuresRemaining = 0;
+
+vi.mock('@ai-sdk/harness/utils', async importOriginal => {
+  const actual = await importOriginal<typeof HarnessUtils>();
+  class FakeSandboxChannel {
+    constructor(options: unknown) {
+      channelOptions.push(options);
+    }
+    async open(input?: unknown): Promise<void> {
+      channelOpenInputs.push(input);
+      if (openFailuresRemaining > 0) {
+        openFailuresRemaining--;
+        throw new Error('bridge unavailable');
+      }
+    }
+    on(): () => void {
+      return () => {};
+    }
+    onClose(): void {}
+    send(): void {}
+    beginClose(): void {}
+    isClosed(): boolean {
+      return false;
+    }
+    suspend(): Promise<number> {
+      return Promise.resolve(7);
+    }
+    close(): void {}
+  }
+  return { ...actual, SandboxChannel: FakeSandboxChannel };
+});
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof NodeFsPromises>();
+  return {
+    ...actual,
+    readFile: vi.fn(async (input: unknown, ...rest: unknown[]) => {
+      const path = typeof input === 'string' ? input : String(input);
+      if (path.endsWith('/bridge/index.mjs')) return '// mock bridge\n';
+      if (path.endsWith('/bridge/package.json')) return '{"name":"mock"}';
+      if (path.endsWith('/bridge/pnpm-lock.yaml'))
+        return 'lockfileVersion: "9.0"\n';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (actual.readFile as any)(input, ...rest);
+    }),
+  };
+});
+
+function textStream(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (text.length > 0) {
+        controller.enqueue(new TextEncoder().encode(text));
+      }
+      controller.close();
+    },
+  });
+}
+
+function fakeSandbox(options?: {
+  spawnEnvs?: Array<Record<string, string | undefined>>;
+  spawns?: string[];
+}): HarnessV1NetworkSandboxSession {
+  const spawns = options?.spawns ?? [];
+  const session = {
+    run: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    readTextFile: async () => null,
+    writeTextFile: async () => {},
+    spawn: async ({
+      command,
+      env,
+    }: {
+      command: string;
+      env?: Record<string, string | undefined>;
+    }) => {
+      spawns.push(command);
+      if (env) options?.spawnEnvs?.push(env);
+      return {
+        stdout: textStream('{"type":"bridge-ready","port":4319}\n'),
+        stderr: textStream(''),
+        kill: async () => {},
+        wait: async () => ({ exitCode: 0 }),
+      };
+    },
+  };
+  return {
+    id: 'resumed-sandbox',
+    defaultWorkingDirectory: '/vercel/sandbox',
+    restricted: () => session,
+    ports: [4319],
+    async getPortUrl() {
+      return 'ws://127.0.0.1:1';
+    },
+    async stop() {},
+    ...session,
+  } as unknown as HarnessV1NetworkSandboxSession;
+}
+
+function redactedResumeData() {
+  return {
+    bridge: {
+      port: 4319,
+      lastSeenEventId: 7,
+      sandboxId: 'stale-serialized-sandbox',
+    },
+  };
+}
+
+describe('Fieldwork: adapter-owned deterministic bridge-token reconstruction', () => {
+  beforeEach(() => {
+    channelOptions.length = 0;
+    channelOpenInputs.length = 0;
+    openFailuresRemaining = 0;
+  });
+
+  it('accepts redacted lifecycle state and derives from the resumed sandbox id', async () => {
+    const mintBridgeToken = vi.fn(
+      (sandboxId: string) => `token-for-${sandboxId}`,
+    );
+    const codex = createCodex({ mintBridgeToken });
+    const harness = { ...codex, getBootstrap: undefined };
+    const sandboxSession = fakeSandbox();
+    const resumeSession = vi.fn(async () => sandboxSession);
+    const agent = new HarnessAgent({
+      harness,
+      sandbox: {
+        specificationVersion: 'harness-sandbox-v1',
+        providerId: 'sentinel-sandbox',
+        createSession: vi.fn(async () => {
+          throw new Error('fresh session should not be created');
+        }),
+        resumeSession,
+      } as never,
+    });
+
+    const session = await agent.createSession({
+      sessionId: 's1',
+      resumeFrom: {
+        type: 'resume-session',
+        harnessId: 'codex',
+        specificationVersion: 'harness-v1',
+        data: redactedResumeData(),
+      },
+    });
+
+    expect(resumeSession).toHaveBeenCalledTimes(1);
+    expect(mintBridgeToken).toHaveBeenCalledExactlyOnceWith('resumed-sandbox');
+    expect(channelOptions.at(0)).toMatchObject({ initialLastSeenEventId: 7 });
+
+    const detached = await session.detach();
+    expect(detached.data).toMatchObject({
+      bridge: { token: 'token-for-resumed-sandbox' },
+    });
+  });
+
+  it('preserves suspended-turn replay cursor when the token is redacted', async () => {
+    const mintBridgeToken = vi.fn(() => 'derived-token');
+    const harness = createCodex({ mintBridgeToken });
+
+    const session = await harness.doStart({
+      sessionId: 's1',
+      sandboxSession: fakeSandbox(),
+      sessionWorkDir: '/vercel/sandbox/codex-s1',
+      continueFrom: {
+        type: 'continue-turn',
+        harnessId: 'codex',
+        specificationVersion: 'harness-v1',
+        data: redactedResumeData(),
+      },
+    });
+
+    expect(channelOptions.at(0)).toMatchObject({ initialLastSeenEventId: 7 });
+    expect(channelOpenInputs.at(0)).toEqual({ resume: true });
+    expect(mintBridgeToken).toHaveBeenCalledExactlyOnceWith('resumed-sandbox');
+    await session.doDetach();
+  });
+
+  it('rejects a redacted live token when deterministic reconstruction is unavailable', async () => {
+    const harness = createCodex();
+
+    await expect(
+      harness.doStart({
+        sessionId: 's1',
+        sandboxSession: fakeSandbox(),
+        sessionWorkDir: '/vercel/sandbox/codex-s1',
+        resumeFrom: {
+          type: 'resume-session',
+          harnessId: 'codex',
+          specificationVersion: 'harness-v1',
+          data: redactedResumeData(),
+        },
+      }),
+    ).rejects.toBeInstanceOf(HarnessCapabilityUnsupportedError);
+
+    expect(channelOptions).toHaveLength(0);
+  });
+
+  it('reuses one derived token when live attach fails and respawn takes over', async () => {
+    openFailuresRemaining = 1;
+    const spawnEnvs: Array<Record<string, string | undefined>> = [];
+    const spawns: string[] = [];
+    const mintBridgeToken = vi.fn(
+      (sandboxId: string) => `token-for-${sandboxId}`,
+    );
+    const harness = createCodex({ mintBridgeToken });
+
+    const session = await harness.doStart({
+      sessionId: 's1',
+      sandboxSession: fakeSandbox({ spawnEnvs, spawns }),
+      sessionWorkDir: '/vercel/sandbox/codex-s1',
+      resumeFrom: {
+        type: 'resume-session',
+        harnessId: 'codex',
+        specificationVersion: 'harness-v1',
+        data: redactedResumeData(),
+      },
+    });
+
+    expect(mintBridgeToken).toHaveBeenCalledExactlyOnceWith('resumed-sandbox');
+    expect(spawns).toHaveLength(1);
+    expect(spawnEnvs.at(0)?.BRIDGE_CHANNEL_TOKEN).toBe(
+      'token-for-resumed-sandbox',
+    );
+    await session.doDetach();
+  });
+});
+''')
+          PY
+      - name: Fence source candidate
+        run: |
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            packages/harness-codex/src/codex-harness-derived-bridge-token.fieldwork.test.ts \
+            packages/harness-codex/src/codex-harness.ts | sort)"
+          printf 'changed files:\n%s\n' "$actual"
+          test "$actual" = "$expected"
+          git diff --check
+      - name: Publish candidate generation
+        run: |
+          git fetch origin candidate/codex-derived-bridge-token-current
+          remote_head="$(git rev-parse origin/candidate/codex-derived-bridge-token-current)"
+          echo "remote source head before publication: $remote_head"
+          test "$remote_head" = "$SOURCE_HEAD"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add \
+              packages/harness-codex/src/codex-harness.ts \
+              packages/harness-codex/src/codex-harness-derived-bridge-token.fieldwork.test.ts
+            git commit -m 'Prototype deterministic bridge-token reconstruction'
+            git push origin HEAD:candidate/codex-derived-bridge-token-current
+          fi
+          final_head="$(git rev-parse HEAD)"
+          echo "FINAL_SOURCE_HEAD=$final_head" >> "$GITHUB_ENV"
+          echo "final source head: $final_head"
+      - name: Codex harness type check
+        run: pnpm -C packages/harness-codex type-check
+      - name: Codex harness Node tests
+        run: pnpm -C packages/harness-codex test:node
+      - name: Final source fence
+        run: |
+          echo "validated source head: $FINAL_SOURCE_HEAD"
+          test "$(git rev-parse HEAD)" = "$FINAL_SOURCE_HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
