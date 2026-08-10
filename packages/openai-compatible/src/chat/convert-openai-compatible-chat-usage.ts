@@ -27,8 +27,10 @@ export function convertOpenAICompatibleChatUsage(
   const reasoningTokens =
     usage.completion_tokens_details?.reasoning_tokens ?? 0;
   const outputTokensFromTotal =
-    usage.total_tokens != null && usage.total_tokens >= promptTokens
-      ? usage.total_tokens - promptTokens
+    usage.prompt_tokens != null &&
+    usage.total_tokens != null &&
+    usage.total_tokens >= usage.prompt_tokens
+      ? usage.total_tokens - usage.prompt_tokens
       : 0;
   const outputTokens = Math.max(
     completionTokens,
