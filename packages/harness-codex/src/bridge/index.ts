@@ -63,7 +63,6 @@ const HARNESS_CLIENT_APP = procEnv.AI_SDK_HARNESS_CLIENT_APP;
 const CODEX_RUNTIME_BLOCKED_ENV = new Set([
   'BRIDGE_CHANNEL_TOKEN',
   'BRIDGE_WS_PORT',
-  'BRIDGE_REPLAY_FROM_DISK',
 ]);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -257,7 +256,7 @@ async function runTurn(start: StartMessage, turn: BridgeTurn): Promise<void> {
 
 /**
  * Build the environment inherited by the Codex runtime. Bridge transport
- * controls belong to the wrapper process and must not cross into the model
+ * credentials belong to the wrapper process and must not cross into the model
  * runtime; provider and caller environment values continue to pass through.
  */
 function createCodexRuntimeEnvironment(
