@@ -225,7 +225,7 @@ describe('doGenerate', () => {
         "outputTokens": {
           "reasoning": 320,
           "text": 0,
-          "total": 2,
+          "total": 322,
         },
         "raw": {
           "completion_tokens": 2,
