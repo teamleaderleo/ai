@@ -1,0 +1,32 @@
+name: Fieldwork Claude permission-kind repair
+
+on:
+  push:
+    branches:
+      - carrier/claude-permission-kind-parity-run
+  pull_request:
+    branches:
+      - candidate/claude-permission-kind-parity
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Source fence
+        run: git diff --check
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Build host and sandbox bridge entries
+        run: pnpm -C packages/harness-claude-code build
+      - name: Full Node package tests
+        run: pnpm -C packages/harness-claude-code test:node
