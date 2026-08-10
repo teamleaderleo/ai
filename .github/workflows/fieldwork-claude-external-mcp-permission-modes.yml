@@ -1,0 +1,30 @@
+name: Fieldwork Claude external MCP permissions
+
+on:
+  push:
+    branches:
+      - carrier/claude-external-mcp-permission-modes-run
+  pull_request:
+    branches:
+      - research/claude-external-mcp-permission-modes-current
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Source fence
+        run: git diff --check
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Focused external MCP permission discriminator
+        run: pnpm -C packages/harness-claude-code exec vitest --config vitest.node.config.js --run src/bridge/external-mcp-permission-mode.fieldwork.test.ts
