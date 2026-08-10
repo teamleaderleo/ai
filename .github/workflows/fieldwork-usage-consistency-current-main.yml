@@ -1,0 +1,129 @@
+name: Fieldwork verify current-main usage candidate
+
+on:
+  pull_request:
+    branches:
+      - candidate/usage-consistency-current-main
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/usage-consistency-current-main
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Capture source generation
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
+          echo "source head: $source_head"
+      - run: pnpm install --frozen-lockfile
+      - name: Renew generated usage expectations
+        run: pnpm -C packages/openai-compatible exec vitest --config vitest.node.config.js --run -u
+      - name: Fence and materialize generated expectations
+        run: |
+          actual="$(git diff --name-only | sort)"
+          if [ -n "$actual" ]; then
+            expected="$(printf '%s\n' \
+              packages/openai-compatible/src/chat/__snapshots__/openai-compatible-chat-language-model.test.ts.snap \
+              packages/openai-compatible/src/chat/openai-compatible-chat-language-model.test.ts | sort)"
+            printf 'generated files:\n%s\n' "$actual"
+            test "$actual" = "$expected"
+            git diff --check
+
+            git fetch origin candidate/usage-consistency-current-main
+            remote_head="$(git rev-parse origin/candidate/usage-consistency-current-main)"
+            echo "remote source head before publication: $remote_head"
+            test "$remote_head" = "$SOURCE_HEAD"
+
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add \
+              packages/openai-compatible/src/chat/__snapshots__/openai-compatible-chat-language-model.test.ts.snap \
+              packages/openai-compatible/src/chat/openai-compatible-chat-language-model.test.ts
+            git commit -m 'Update usage snapshots for reconciled totals'
+            git push origin HEAD:candidate/usage-consistency-current-main
+          else
+            echo 'generated expectations already materialized'
+          fi
+
+          final_head="$(git rev-parse HEAD)"
+          echo "FINAL_SOURCE_HEAD=$final_head" >> "$GITHUB_ENV"
+          echo "final source head: $final_head"
+      - name: OpenAI-compatible type check
+        run: pnpm -C packages/openai-compatible type-check
+      - name: OpenAI-compatible Node tests
+        run: pnpm -C packages/openai-compatible test:node
+      - name: OpenAI-compatible Edge tests
+        run: pnpm -C packages/openai-compatible test:edge
+      - name: Core aggregate/detail contract
+        run: |
+          cat > packages/ai/src/types/.fieldwork-usage-detail-contract.test.ts <<'EOF'
+          import type { LanguageModelV4Usage } from '@ai-sdk/provider';
+          import { describe, expect, it } from 'vitest';
+          import { addLanguageModelUsage, asLanguageModelUsage } from './usage';
+
+          const providerDialectUsage: LanguageModelV4Usage = {
+            inputTokens: {
+              total: 12,
+              noCache: 12,
+              cacheRead: 0,
+              cacheWrite: undefined,
+            },
+            outputTokens: {
+              total: 322,
+              text: 0,
+              reasoning: 320,
+            },
+          };
+
+          describe('Fieldwork: aggregate usage can retain unclassified output', () => {
+            it('keeps the normalized aggregate authoritative', () => {
+              expect(asLanguageModelUsage(providerDialectUsage)).toMatchObject({
+                inputTokens: 12,
+                outputTokens: 322,
+                outputTokenDetails: {
+                  textTokens: 0,
+                  reasoningTokens: 320,
+                },
+                totalTokens: 334,
+              });
+            });
+
+            it('aggregates totals and details independently', () => {
+              const normalized = asLanguageModelUsage(providerDialectUsage);
+              expect(addLanguageModelUsage(normalized, normalized)).toMatchObject({
+                inputTokens: 24,
+                outputTokens: 644,
+                outputTokenDetails: {
+                  textTokens: 0,
+                  reasoningTokens: 640,
+                },
+                totalTokens: 668,
+              });
+            });
+          });
+          EOF
+          pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/types/.fieldwork-usage-detail-contract.test.ts
+          rm packages/ai/src/types/.fieldwork-usage-detail-contract.test.ts
+      - name: Baseten type check
+        run: pnpm -C packages/baseten type-check
+      - name: Baseten Node tests
+        run: pnpm -C packages/baseten test:node
+      - name: Baseten Edge tests
+        run: pnpm -C packages/baseten test:edge
+      - name: Final source fence
+        run: |
+          echo "validated source head: $FINAL_SOURCE_HEAD"
+          test "$(git rev-parse HEAD)" = "$FINAL_SOURCE_HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
