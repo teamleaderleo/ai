@@ -132,7 +132,7 @@ So, my response will be: Grok",
     "outputTokens": {
       "reasoning": 320,
       "text": 0,
-      "total": 2,
+      "total": 322,
     },
     "raw": {
       "completion_tokens": 2,
@@ -276,7 +276,7 @@ Finally, structure it as: <function_call>{"action": "weather", "action_input": {
     "outputTokens": {
       "reasoning": 255,
       "text": 0,
-      "total": 26,
+      "total": 281,
     },
     "raw": {
       "completion_tokens": 26,
@@ -2088,7 +2088,7 @@ exports[`doStream > text (fixture) > should stream text content 1`] = `
       "outputTokens": {
         "reasoning": 340,
         "text": 0,
-        "total": 2,
+        "total": 342,
       },
       "raw": {
         "completion_tokens": 2,
@@ -3317,7 +3317,7 @@ exports[`doStream > tool call (fixture) > should stream tool call content 1`] = 
       "outputTokens": {
         "reasoning": 227,
         "text": 0,
-        "total": 26,
+        "total": 253,
       },
       "raw": {
         "completion_tokens": 26,
