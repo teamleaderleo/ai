@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - carrier/usage-consistency-run
+  pull_request:
+    branches:
+      - research/usage-consistency-fc3baaf
 
 permissions:
   contents: read
