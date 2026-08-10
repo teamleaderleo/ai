@@ -25,10 +25,14 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
   it('coalesces a 202 start while the inbound GET is pending', async () => {
     let getCalls = 0;
     let markFirstGetStarted!: () => void;
+    let markSecondGetStarted!: () => void;
     let releaseFirstGet!: () => void;
 
     const firstGetStarted = new Promise<void>(resolve => {
       markFirstGetStarted = resolve;
+    });
+    const secondGetStarted = new Promise<void>(resolve => {
+      markSecondGetStarted = resolve;
     });
     const firstGetResponse = new Promise<Response>(resolve => {
       releaseFirstGet = () => resolve(new Response(null, { status: 405 }));
@@ -42,6 +46,7 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
             markFirstGetStarted();
             return firstGetResponse;
           }
+          markSecondGetStarted();
           return new Response(null, { status: 405 });
         }
 
@@ -63,17 +68,18 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
       await firstGetStarted;
 
       await transport.send(notification);
-      await flushMicrotasks();
-
       expect(getCalls).toBe(1);
+
+      releaseFirstGet();
+      await secondGetStarted;
+      expect(getCalls).toBe(2);
     } finally {
       releaseFirstGet();
-      await flushMicrotasks();
       await transport.close();
     }
   });
 
-  it('preserves a scheduled reconnect while the opening promise settles', async () => {
+  it('does not cancel a reconnect while the opening promise settles', async () => {
     const fetch = vi.fn(
       async (_input: RequestInfo | URL, init?: RequestInit) =>
         new Response(null, { status: init?.method === 'GET' ? 405 : 202 }),
@@ -100,6 +106,8 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
 
     try {
+      // Model the narrow post-EOF state where a reconnect timer exists before
+      // the opening promise has finished relinquishing ownership.
       lifecycle.startInboundSse();
 
       expect(clearTimeoutSpy).not.toHaveBeenCalledWith(reconnectTimeout);
@@ -111,7 +119,7 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
     }
   });
 
-  it('avoids a duplicate GET when 202 arrives after EOF', async () => {
+  it('does not create a third GET when 202 follows EOF', async () => {
     let getCalls = 0;
     let markFirstReaderPull!: () => void;
     const firstReaderPull = new Promise<void>(resolve => {
