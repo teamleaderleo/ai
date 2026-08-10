@@ -1,0 +1,30 @@
+name: Fieldwork OpenCode harness-tools identity
+
+on:
+  push:
+    branches:
+      - carrier/opencode-harness-tools-name-collision-run
+  pull_request:
+    branches:
+      - research/opencode-harness-tools-name-collision-74556f
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Source fence
+        run: git diff --check
+      - name: Package type check
+        run: pnpm -C packages/harness-opencode type-check
+      - name: Focused collision discriminator
+        run: pnpm -C packages/harness-opencode exec vitest --config vitest.node.config.js --run src/bridge/harness-tools-name-collision.fieldwork.test.ts
