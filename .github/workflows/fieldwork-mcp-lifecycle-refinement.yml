@@ -1,0 +1,82 @@
+name: Fieldwork MCP lifecycle refinement
+
+on:
+  pull_request:
+    branches:
+      - refine/mcp-inbound-sse-lifecycle-upstream
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event.pull_request.head.ref == 'execution/mcp-lifecycle-refinement-054f'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SOURCE_SHA: 054f9309dec0ab59a3ff38fc926cf461ad3a6904
+      BASE_SHA: 74abcdfb6a41666b9910974510d6c9afd960ea1b
+    steps:
+      - name: Check out exact product candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 054f9309dec0ab59a3ff38fc926cf461ad3a6904
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact product identity and fence
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          actual="$(git diff --name-only "$BASE_SHA" HEAD | sort)"
+          expected="$(printf '%s\n' \
+            '.changeset/tidy-sse-lifecycle.md' \
+            'packages/mcp/src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts' \
+            'packages/mcp/src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts' \
+            'packages/mcp/src/tool/mcp-http-transport.ts' | sort)"
+          test "$actual" = "$expected"
+          git diff --check "$BASE_SHA" HEAD
+
+      - name: Build package workspace
+        run: pnpm run build:packages
+
+      - name: Run lifecycle and neighboring transport controls under Node
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.node.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts \
+            src/tool/mcp-http-transport.test.ts
+
+      - name: Run lifecycle and neighboring transport controls under Edge
+        run: |
+          pnpm -C packages/mcp exec vitest --config vitest.edge.config.js --run \
+            src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts \
+            src/tool/mcp-http-transport.test.ts
+
+      - name: Run MCP package typecheck
+        run: pnpm -C packages/mcp type-check
+
+      - name: Verify formatting and clean checkout
+        run: |
+          pnpm exec oxfmt --check \
+            packages/mcp/src/tool/mcp-http-transport.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-lifecycle.test.ts \
+            packages/mcp/src/tool/mcp-http-transport-inbound-sse-reader-release.test.ts \
+            .changeset/tidy-sse-lifecycle.md
+          git diff --check
+          test -z "$(git status --porcelain)"
