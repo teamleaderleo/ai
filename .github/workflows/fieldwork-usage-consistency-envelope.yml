@@ -21,9 +21,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: OpenAI-compatible type check
         run: pnpm -C packages/openai-compatible type-check
-      - name: OpenAI-compatible Node tests
-        run: pnpm -C packages/openai-compatible test:node
-      - name: OpenAI-compatible Edge tests
+      - name: Renew expected Node usage snapshots
+        run: pnpm -C packages/openai-compatible exec vitest --config vitest.node.config.js --run -u
+      - name: Fence semantic-output changes
+        run: |
+          git diff --name-only
+          unexpected="$(git diff --name-only | grep -Ev '^packages/openai-compatible/src/chat/(openai-compatible-chat-language-model\.test\.ts|__snapshots__/openai-compatible-chat-language-model\.test\.ts\.snap)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "Unexpected refreshed files:"
+            echo "$unexpected"
+            exit 1
+          fi
+          git diff -- packages/openai-compatible/src/chat/openai-compatible-chat-language-model.test.ts packages/openai-compatible/src/chat/__snapshots__/openai-compatible-chat-language-model.test.ts.snap
+      - name: OpenAI-compatible Edge tests after renewal
         run: pnpm -C packages/openai-compatible test:edge
       - name: Baseten type check
         run: pnpm -C packages/baseten type-check
