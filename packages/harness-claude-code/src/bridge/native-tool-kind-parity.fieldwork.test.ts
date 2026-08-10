@@ -188,4 +188,18 @@ describe('Fieldwork: Claude public catalog / bridge permission-kind parity', () 
       ).toBe(true);
     }
   });
+
+  test('unknown native tools enter approval under allow-edits', async () => {
+    const options = await loadOptions('allow-edits');
+    const canUseTool = options.canUseTool as CanUseTool;
+
+    const result = await canUseTool(
+      'FutureNativeProcessTool',
+      { command: 'synthetic' },
+      { toolUseID: 'unknown-native' },
+    );
+
+    expect(result.behavior).toBe('deny');
+    expect(state.approvalRequests).toContain('unknown-native');
+  });
 });
