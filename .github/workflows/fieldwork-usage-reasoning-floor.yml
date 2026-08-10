@@ -19,9 +19,15 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Package type check
+      - name: OpenAI-compatible type check
         run: pnpm -C packages/openai-compatible type-check
-      - name: Node package tests
+      - name: OpenAI-compatible Node tests
         run: pnpm -C packages/openai-compatible test:node
-      - name: Edge package tests
+      - name: OpenAI-compatible Edge tests
         run: pnpm -C packages/openai-compatible test:edge
+      - name: Baseten type check
+        run: pnpm -C packages/baseten type-check
+      - name: Baseten Node tests
+        run: pnpm -C packages/baseten test:node
+      - name: Baseten Edge tests
+        run: pnpm -C packages/baseten test:edge
