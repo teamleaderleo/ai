@@ -1,6 +1,9 @@
 name: Fieldwork Pi extension reload failure
 
 on:
+  push:
+    branches:
+      - carrier/pi-extension-reload-failure-run
   pull_request:
     branches:
       - research/pi-extension-reload-failure-ecd916
