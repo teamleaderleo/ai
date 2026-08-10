@@ -210,7 +210,8 @@ function nativeToolRequiresApproval(input: {
   permissionMode: 'allow-reads' | 'allow-edits' | 'allow-all';
 }): boolean {
   if (input.permissionMode === 'allow-all') return false;
-  const kind = NATIVE_TOOL_KINDS[input.nativeName] ?? 'edit';
+  const kind = NATIVE_TOOL_KINDS[input.nativeName];
+  if (kind == null) return true;
   if (input.permissionMode === 'allow-edits') return kind === 'bash';
   return kind === 'edit' || kind === 'bash';
 }
