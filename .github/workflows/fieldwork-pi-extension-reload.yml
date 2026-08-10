@@ -1,0 +1,27 @@
+name: Fieldwork Pi extension reload failure
+
+on:
+  pull_request:
+    branches:
+      - research/pi-extension-reload-failure-ecd916
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Resolved Pi package
+        run: pnpm -C packages/harness-pi exec node --input-type=module -e "import pkg from '@earendil-works/pi-coding-agent/package.json' with { type: 'json' }; console.log('FIELDWORK_PI_VERSION', pkg.version)"
+      - name: Package type check
+        run: pnpm -C packages/harness-pi type-check
+      - name: Loader characterization
+        run: pnpm -C packages/harness-pi test:node -- pi-extension-reload-failure.fieldwork.test.ts
