@@ -22,7 +22,7 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
     vi.useRealTimers();
   });
 
-  it('coalesces a 202 start while the inbound GET is pending', async () => {
+  it('coalesces 202 starts while the inbound GET is pending', async () => {
     let getCalls = 0;
     let markFirstGetStarted!: () => void;
     let markSecondGetStarted!: () => void;
@@ -67,7 +67,10 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
       await transport.start();
       await firstGetStarted;
 
-      await transport.send(notification);
+      await Promise.all([
+        transport.send(notification),
+        transport.send(notification),
+      ]);
       expect(getCalls).toBe(1);
 
       releaseFirstGet();
@@ -77,6 +80,63 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
       releaseFirstGet();
       await transport.close();
     }
+  });
+
+  it('does not reopen after close while an inbound GET is pending', async () => {
+    let getCalls = 0;
+    let markGetStarted!: () => void;
+    let markGetAborted!: () => void;
+    const getStarted = new Promise<void>(resolve => {
+      markGetStarted = resolve;
+    });
+    const getAborted = new Promise<void>(resolve => {
+      markGetAborted = resolve;
+    });
+
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method !== 'GET') {
+          return new Response(null, { status: 202 });
+        }
+
+        getCalls += 1;
+        markGetStarted();
+        const signal = init.signal as AbortSignal;
+        return new Promise<Response>((_resolve, reject) => {
+          const rejectForAbort = () => {
+            markGetAborted();
+            reject(signal.reason);
+          };
+          if (signal.aborted) {
+            rejectForAbort();
+            return;
+          }
+          signal.addEventListener('abort', rejectForAbort, { once: true });
+        });
+      },
+    );
+
+    const transport = new HttpMCPTransport({
+      url: 'http://localhost:4000/mcp',
+      fetch,
+    });
+    const errors: unknown[] = [];
+    transport.onerror = error => {
+      errors.push(error);
+    };
+
+    await transport.start();
+    await getStarted;
+    await transport.send(notification);
+    expect(getCalls).toBe(1);
+
+    await transport.close();
+    await getAborted;
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(30000);
+
+    expect(getCalls).toBe(1);
+    expect(errors).toHaveLength(0);
   });
 
   it('does not cancel a reconnect while the opening promise settles', async () => {
