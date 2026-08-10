@@ -1,0 +1,51 @@
+name: Fieldwork materialize usage snapshots
+
+on:
+  pull_request:
+    branches:
+      - candidate/usage-consistency-envelope
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/usage-consistency-envelope
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Verify canonical source generation
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="9835c28c19687fff69fbae846190a954c70a2338"
+          echo "candidate head: $actual"
+          test "$actual" = "$expected"
+      - run: pnpm install --frozen-lockfile
+      - name: Renew expected usage snapshots
+        run: pnpm -C packages/openai-compatible exec vitest --config vitest.node.config.js --run -u
+      - name: Fence generated changes
+        run: |
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            packages/openai-compatible/src/chat/__snapshots__/openai-compatible-chat-language-model.test.ts.snap \
+            packages/openai-compatible/src/chat/openai-compatible-chat-language-model.test.ts | sort)"
+          printf 'changed files:\n%s\n' "$actual"
+          test -n "$actual"
+          test "$actual" = "$expected"
+          git diff --check
+      - name: Publish generated snapshots to canonical candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            packages/openai-compatible/src/chat/__snapshots__/openai-compatible-chat-language-model.test.ts.snap \
+            packages/openai-compatible/src/chat/openai-compatible-chat-language-model.test.ts
+          git commit -m 'Update usage snapshots for conservative envelope'
+          git push origin HEAD:candidate/usage-consistency-envelope
