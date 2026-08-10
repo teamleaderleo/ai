@@ -25,6 +25,7 @@ export function convertOpenAICompatibleChatUsage(
   const cacheReadTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
   const reasoningTokens =
     usage.completion_tokens_details?.reasoning_tokens ?? 0;
+  const outputTokens = Math.max(completionTokens, reasoningTokens);
 
   return {
     inputTokens: {
@@ -34,7 +35,7 @@ export function convertOpenAICompatibleChatUsage(
       cacheWrite: undefined,
     },
     outputTokens: {
-      total: completionTokens,
+      total: outputTokens,
       text: Math.max(0, completionTokens - reasoningTokens),
       reasoning: reasoningTokens,
     },
