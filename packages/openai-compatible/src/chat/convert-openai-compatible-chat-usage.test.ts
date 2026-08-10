@@ -32,7 +32,7 @@ describe('convertOpenAICompatibleChatUsage', () => {
     });
   });
 
-  it('clamps text tokens at 0 when reasoning exceeds completion', () => {
+  it('uses reasoning as the output-total floor when completion undercounts it', () => {
     // Provider-inconsistent usage (Baseten Kimi-K3, finish_reason 'length'):
     // completion_tokens undercounts the actual generation, so
     // completion_tokens_details.reasoning_tokens > completion_tokens.
@@ -51,7 +51,7 @@ describe('convertOpenAICompatibleChatUsage', () => {
         cacheRead: 60,
         cacheWrite: undefined,
       },
-      outputTokens: { total: 6000, text: 0, reasoning: 6001 },
+      outputTokens: { total: 6001, text: 0, reasoning: 6001 },
       raw: usage,
     });
   });
