@@ -20,7 +20,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Candidate generation
-        run: git log -3 --oneline
+        run: git log -5 --oneline
       - name: OpenAI-compatible type check
         run: pnpm -C packages/openai-compatible type-check
       - name: Renew expected Node usage snapshots
@@ -37,6 +37,8 @@ jobs:
           git diff -- packages/openai-compatible/src/chat/openai-compatible-chat-language-model.test.ts packages/openai-compatible/src/chat/__snapshots__/openai-compatible-chat-language-model.test.ts.snap
       - name: OpenAI-compatible Edge tests after renewal
         run: pnpm -C packages/openai-compatible test:edge
+      - name: Core aggregate/detail contract
+        run: pnpm -C packages/ai test:node -- usage-detail-contract.fieldwork.test.ts
       - name: Baseten type check
         run: pnpm -C packages/baseten type-check
       - name: Baseten Node tests
