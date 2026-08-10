@@ -1,6 +1,7 @@
 import type { HarnessV1NetworkSandboxSession } from '@ai-sdk/harness';
 import type * as HarnessUtils from '@ai-sdk/harness/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createClaudeCode } from './claude-code-harness';
 
 const openCalls: Array<{ resume?: boolean } | undefined> = [];
 
@@ -26,8 +27,6 @@ vi.mock('@ai-sdk/harness/utils', async importOriginal => {
   }
   return { ...actual, SandboxChannel: FakeSandboxChannel };
 });
-
-import { createClaudeCode } from './claude-code-harness';
 
 function textStream(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
