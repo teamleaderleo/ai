@@ -1,0 +1,25 @@
+name: Fieldwork bridge token redaction
+
+on:
+  pull_request:
+    branches:
+      - research/bridge-token-redaction-fc3baaf
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Package type check
+        run: pnpm -C packages/harness-codex type-check
+      - name: Characterization
+        run: pnpm -C packages/harness-codex test:node -- codex-harness-bridge-token-redaction.fieldwork.test.ts
