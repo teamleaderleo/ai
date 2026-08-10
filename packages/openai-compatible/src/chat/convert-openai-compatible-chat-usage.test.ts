@@ -87,6 +87,20 @@ describe('convertOpenAICompatibleChatUsage', () => {
     });
   });
 
+  it('ignores total_tokens for output reconciliation when prompt_tokens is missing', () => {
+    const usage = {
+      completion_tokens: 4,
+      total_tokens: 104,
+      completion_tokens_details: { reasoning_tokens: 5 },
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage).outputTokens).toEqual({
+      total: 5,
+      text: 0,
+      reasoning: 5,
+    });
+  });
+
   it('falls back to completion and reasoning when total_tokens is absent', () => {
     const usage = {
       prompt_tokens: 10,
