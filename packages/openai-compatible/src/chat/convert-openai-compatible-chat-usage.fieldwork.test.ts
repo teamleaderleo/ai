@@ -21,9 +21,9 @@ describe('Fieldwork: inconsistent provider usage normalization', () => {
 
   it('keeps normalized input plus output aligned with the provider total', () => {
     const usage = convertOpenAICompatibleChatUsage(providerUsage);
+    const normalizedTotal =
+      (usage.inputTokens.total ?? 0) + (usage.outputTokens.total ?? 0);
 
-    expect((usage.inputTokens.total ?? 0) + (usage.outputTokens.total ?? 0)).toBe(
-      providerUsage.total_tokens,
-    );
+    expect(normalizedTotal).toBe(providerUsage.total_tokens);
   });
 });
