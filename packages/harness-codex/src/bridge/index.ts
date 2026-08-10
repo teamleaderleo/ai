@@ -60,6 +60,11 @@ const cliShimDir = requireArg({
   name: '--cli-shim-dir',
 });
 const HARNESS_CLIENT_APP = procEnv.AI_SDK_HARNESS_CLIENT_APP;
+const CODEX_RUNTIME_BLOCKED_ENV = new Set([
+  'BRIDGE_CHANNEL_TOKEN',
+  'BRIDGE_WS_PORT',
+  'BRIDGE_REPLAY_FROM_DISK',
+]);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const codexSdk = codexSdkModule as any;
@@ -174,11 +179,7 @@ async function runTurn(start: StartMessage, turn: BridgeTurn): Promise<void> {
     ...(!usesConfiguredModelProvider && apiBaseUrl
       ? { baseUrl: apiBaseUrl }
       : {}),
-    env: Object.fromEntries(
-      Object.entries(procEnv).filter(
-        (entry): entry is [string, string] => typeof entry[1] === 'string',
-      ),
-    ),
+    env: createCodexRuntimeEnvironment(procEnv),
     ...(Object.keys(codexConfig).length > 0 ? { config: codexConfig } : {}),
   });
 
@@ -252,6 +253,23 @@ async function runTurn(start: StartMessage, turn: BridgeTurn): Promise<void> {
   });
 
   void turn.pendingUserMessages; // accepted but only consumed when codex supports streamed user input
+}
+
+/**
+ * Build the environment inherited by the Codex runtime. Bridge transport
+ * controls belong to the wrapper process and must not cross into the model
+ * runtime; provider and caller environment values continue to pass through.
+ */
+function createCodexRuntimeEnvironment(
+  env: NodeJS.ProcessEnv,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === 'string' &&
+        !CODEX_RUNTIME_BLOCKED_ENV.has(entry[0]),
+    ),
+  );
 }
 
 /**
