@@ -6,6 +6,7 @@ export function convertOpenAICompatibleChatUsage(
     | {
         prompt_tokens?: number | null;
         completion_tokens?: number | null;
+        total_tokens?: number | null;
         prompt_tokens_details?: {
           cached_tokens?: number | null;
         } | null;
@@ -25,6 +26,17 @@ export function convertOpenAICompatibleChatUsage(
   const cacheReadTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
   const reasoningTokens =
     usage.completion_tokens_details?.reasoning_tokens ?? 0;
+  const outputTokensFromTotal =
+    usage.prompt_tokens != null &&
+    usage.total_tokens != null &&
+    usage.total_tokens >= usage.prompt_tokens
+      ? usage.total_tokens - usage.prompt_tokens
+      : 0;
+  const outputTokens = Math.max(
+    completionTokens,
+    reasoningTokens,
+    outputTokensFromTotal,
+  );
 
   return {
     inputTokens: {
@@ -34,7 +46,7 @@ export function convertOpenAICompatibleChatUsage(
       cacheWrite: undefined,
     },
     outputTokens: {
-      total: completionTokens,
+      total: outputTokens,
       text: Math.max(0, completionTokens - reasoningTokens),
       reasoning: reasoningTokens,
     },
