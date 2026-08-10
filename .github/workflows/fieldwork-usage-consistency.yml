@@ -1,0 +1,28 @@
+name: Fieldwork usage consistency
+
+on:
+  push:
+    branches:
+      - carrier/usage-consistency-run
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Package type check
+        run: pnpm -C packages/openai-compatible type-check
+      - name: Node characterization
+        run: pnpm -C packages/openai-compatible test:node -- convert-openai-compatible-chat-usage.fieldwork.test.ts
+      - name: Edge characterization
+        if: always()
+        run: pnpm -C packages/openai-compatible test:edge -- convert-openai-compatible-chat-usage.fieldwork.test.ts
