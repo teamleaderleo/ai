@@ -104,7 +104,7 @@ describe('Codex bridge transport credential isolation', () => {
     vi.resetModules();
   });
 
-  test('preserves application/provider env while withholding bridge-only env from Codex', async () => {
+  test('preserves runtime env while withholding bridge transport credentials from Codex', async () => {
     await import('./index');
 
     expect(state.codexOptions).toHaveLength(1);
@@ -112,9 +112,9 @@ describe('Codex bridge transport credential isolation', () => {
     expect(env).toMatchObject({
       APPLICATION_ENV: 'staging',
       OPENAI_API_KEY: 'synthetic-provider-key',
+      BRIDGE_REPLAY_FROM_DISK: '1',
     });
     expect(env).not.toHaveProperty('BRIDGE_CHANNEL_TOKEN');
     expect(env).not.toHaveProperty('BRIDGE_WS_PORT');
-    expect(env).not.toHaveProperty('BRIDGE_REPLAY_FROM_DISK');
   });
 });
