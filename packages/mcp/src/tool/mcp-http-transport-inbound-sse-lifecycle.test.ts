@@ -71,10 +71,12 @@ describe('HttpMCPTransport inbound SSE lifecycle', () => {
         transport.send(notification),
         transport.send(notification),
       ]);
+      await flushMicrotasks();
       expect(getCalls).toBe(1);
 
       releaseFirstGet();
       await secondGetStarted;
+      await flushMicrotasks();
       expect(getCalls).toBe(2);
     } finally {
       releaseFirstGet();
