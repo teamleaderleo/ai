@@ -86,12 +86,16 @@ describe('Claude Code PowerShell approval', () => {
     vi.resetModules();
   });
 
-  test('routes PowerShell through host approval in allow-edits mode', async () => {
+  test('configures PowerShell to ask and routes it through host approval in allow-edits mode', async () => {
     await import('./index');
 
-    const canUseTool = state.queryArgs[0]?.options.canUseTool as
-      | CanUseTool
+    const queryOptions = state.queryArgs[0]?.options;
+    const settings = queryOptions?.settings as
+      | { permissions?: { ask?: string[] } }
       | undefined;
+    expect(settings?.permissions?.ask).toContain('PowerShell(*)');
+
+    const canUseTool = queryOptions?.canUseTool as CanUseTool | undefined;
     expect(canUseTool).toBeTypeOf('function');
 
     const decision = await canUseTool!(
