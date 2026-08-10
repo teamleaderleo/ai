@@ -1,0 +1,30 @@
+name: Fieldwork Claude MCP harness-tools collision
+
+on:
+  push:
+    branches:
+      - carrier/claude-mcp-harness-tools-collision-run
+  pull_request:
+    branches:
+      - fieldwork/claude-mcp-reserved-name-tests
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Source fence
+        run: git diff --check
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Full Node package tests
+        run: pnpm -C packages/harness-claude-code test:node
