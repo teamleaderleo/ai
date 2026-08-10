@@ -56,9 +56,9 @@ type CanUseTool = (
   options: { toolUseID: string },
 ) => Promise<{ behavior: string }>;
 
-async function loadCanUseTool(
+async function loadOptions(
   permissionMode: 'allow-reads' | 'allow-edits',
-): Promise<CanUseTool> {
+): Promise<Record<string, unknown>> {
   state.start = {
     prompt: 'Inspect the project.',
     thinking: { type: 'disabled' },
@@ -67,9 +67,25 @@ async function loadCanUseTool(
 
   await import('./index');
 
-  const canUseTool = state.queryArgs[0]?.options.canUseTool;
+  const options = state.queryArgs[0]?.options;
+  expect(options).toBeDefined();
+  return options!;
+}
+
+async function loadCanUseTool(
+  permissionMode: 'allow-reads' | 'allow-edits',
+): Promise<CanUseTool> {
+  const options = await loadOptions(permissionMode);
+  const canUseTool = options.canUseTool;
   expect(typeof canUseTool).toBe('function');
   return canUseTool as CanUseTool;
+}
+
+function askRules(options: Record<string, unknown>): string[] {
+  const settings = options.settings as
+    | { permissions?: { ask?: string[] } }
+    | undefined;
+  return settings?.permissions?.ask ?? [];
 }
 
 describe('Fieldwork: new Claude built-in permission parity', () => {
@@ -95,8 +111,10 @@ describe('Fieldwork: new Claude built-in permission parity', () => {
   });
 
   test('known Bash remains approval-gated in allow-edits mode', async () => {
-    const canUseTool = await loadCanUseTool('allow-edits');
+    const options = await loadOptions('allow-edits');
+    const canUseTool = options.canUseTool as CanUseTool;
 
+    expect(askRules(options)).toContain('Bash(*)');
     await expect(
       canUseTool('Bash', { command: 'echo hi' }, { toolUseID: 'bash-1' }),
     ).resolves.toMatchObject({ behavior: 'deny' });
@@ -104,8 +122,10 @@ describe('Fieldwork: new Claude built-in permission parity', () => {
   });
 
   test('new PowerShell is approval-gated in allow-edits mode like its declared bash kind', async () => {
-    const canUseTool = await loadCanUseTool('allow-edits');
+    const options = await loadOptions('allow-edits');
+    const canUseTool = options.canUseTool as CanUseTool;
 
+    expect(askRules(options)).toContain('PowerShell(*)');
     await expect(
       canUseTool(
         'PowerShell',
