@@ -133,7 +133,7 @@ describe('deterministic bridge token resume state', () => {
     });
 
     expect(mintBridgeToken).toHaveBeenCalledExactlyOnceWith('sandbox-a');
-    expect(openCalls).toEqual([{ resume: undefined }]);
+    expect(openCalls).toEqual([undefined]);
     await attachedSession.doDetach();
   });
 
