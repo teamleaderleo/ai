@@ -19,6 +19,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Candidate generation
+        run: git log -3 --oneline
       - name: OpenAI-compatible type check
         run: pnpm -C packages/openai-compatible type-check
       - name: Renew expected Node usage snapshots
