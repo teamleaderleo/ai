@@ -1,0 +1,41 @@
+name: Fieldwork React first assistant fix
+
+on:
+  pull_request:
+    branches:
+      - candidate/react-first-assistant-publication-7d40
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/react-first-assistant-publication-7d40
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Capture exact source head
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
+          echo "source head: $source_head"
+      - run: pnpm install --frozen-lockfile
+      - name: React dependency closure build
+        run: pnpm turbo build --filter=@ai-sdk/react^...
+      - name: React package type check
+        run: pnpm -C packages/react type-check
+      - name: React package tests
+        run: pnpm -C packages/react test
+      - name: Final exact-head fence
+        run: |
+          echo "validated source head: $SOURCE_HEAD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
