@@ -165,6 +165,38 @@ describe('Fieldwork: adapter-owned deterministic bridge-token reconstruction', (
     });
   });
 
+  it('keeps redacted random-token state invalid before sandbox resume', async () => {
+    const codex = createCodex();
+    const harness = { ...codex, getBootstrap: undefined };
+    const resumeSession = vi.fn(async () => fakeSandbox());
+    const agent = new HarnessAgent({
+      harness,
+      sandbox: {
+        specificationVersion: 'harness-sandbox-v1',
+        providerId: 'sentinel-sandbox',
+        createSession: vi.fn(async () => {
+          throw new Error('fresh session should not be created');
+        }),
+        resumeSession,
+      } as never,
+    });
+
+    await expect(
+      agent.createSession({
+        sessionId: 's1',
+        resumeFrom: {
+          type: 'resume-session',
+          harnessId: 'codex',
+          specificationVersion: 'harness-v1',
+          data: redactedData(),
+        } as never,
+      }),
+    ).rejects.toBeDefined();
+
+    expect(resumeSession).not.toHaveBeenCalled();
+    expect(channelOptions).toHaveLength(0);
+  });
+
   it('preserves the suspended-turn cursor when the token is redacted', async () => {
     const mintBridgeToken = vi.fn(() => 'derived-token');
     const session = await createCodex({ mintBridgeToken }).doStart({
