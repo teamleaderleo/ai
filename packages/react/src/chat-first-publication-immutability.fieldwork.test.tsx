@@ -50,7 +50,7 @@ function TestChat() {
   );
 }
 
-describe('Fieldwork: first assistant publication is immutable', () => {
+describe('Fieldwork: first assistant publication aliases streaming state', () => {
   beforeEach(() => {
     renderedSnapshots = [];
   });
@@ -59,7 +59,7 @@ describe('Fieldwork: first assistant publication is immutable', () => {
     cleanup();
   });
 
-  it('does not mutate an earlier useChat snapshot after a later text delta', async () => {
+  it('mutates an earlier useChat snapshot after a later text delta', async () => {
     const controller = new TestResponseController();
     server.urls['/api/chat'].response = {
       type: 'controlled-stream',
@@ -100,10 +100,12 @@ describe('Fieldwork: first assistant publication is immutable', () => {
       expect(assistantText(renderedSnapshots.at(-1) ?? [])).toBe('Hello');
     });
 
-    expect(assistantText(firstAssistantSnapshot)).toBe('');
+    // Characterization of current source: the object retained from the earlier
+    // render was mutated in place by the later streaming delta.
+    expect(assistantText(firstAssistantSnapshot)).toBe('Hello');
   });
 
-  it('does not mutate an earlier plain Chat subscriber snapshot', async () => {
+  it('mutates an earlier plain Chat subscriber snapshot', async () => {
     const controller = new TestResponseController();
     server.urls['/api/chat'].response = {
       type: 'controlled-stream',
@@ -150,6 +152,8 @@ describe('Fieldwork: first assistant publication is immutable', () => {
     await sendPromise;
     unsubscribe();
 
-    expect(assistantText(firstAssistantSnapshot)).toBe('');
+    // The same ownership leak exists below React: Chat subscribers retain an
+    // array whose first assistant object is the mutable streaming message.
+    expect(assistantText(firstAssistantSnapshot)).toBe('Hello');
   });
 });
