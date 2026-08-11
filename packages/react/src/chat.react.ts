@@ -7,6 +7,15 @@ import {
 } from 'ai';
 import { throttle } from './throttle';
 
+function snapshotMessageForPublication<UI_MESSAGE extends UIMessage>(
+  message: UI_MESSAGE,
+): UI_MESSAGE {
+  return {
+    ...message,
+    parts: message.parts.map(part => ({ ...part })),
+  } as UI_MESSAGE;
+}
+
 class ReactChatState<
   UI_MESSAGE extends UIMessage,
 > implements ChatState<UI_MESSAGE> {
@@ -62,13 +71,18 @@ class ReactChatState<
   replaceMessage = (index: number, message: UI_MESSAGE) => {
     this.#messages = [
       ...this.#messages.slice(0, index),
-      // We deep clone the message here to ensure the new React Compiler (currently in RC) detects deeply nested parts/metadata changes:
-      this.snapshot(message),
+      // React Compiler needs fresh identities for message parts that are
+      // mutated while a response streams. The stream processor replaces
+      // nested payload fields such as tool output/input and data values, so
+      // recursively cloning those payloads on every publication is unnecessary.
+      snapshotMessageForPublication(message),
       ...this.#messages.slice(index + 1),
     ];
     this.#callMessagesCallbacks();
   };
 
+  // Keep the full clone at the request ownership boundary. This separates the
+  // mutable streaming state from the message already published to consumers.
   snapshot = <T>(value: T): T => structuredClone(value);
 
   '~registerMessagesCallback' = (
