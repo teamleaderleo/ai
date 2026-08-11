@@ -31,8 +31,11 @@ jobs:
       - name: Type-check React package
         run: pnpm --filter @ai-sdk/react type-check
 
-      - name: Run bounded publication target test
+      - name: Run bounded replacement publication test
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react.test.ts
+
+      - name: Run first-publication alias characterization
+        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react-first-publication-alias.test.ts
 
       - name: Install React Compiler only for this execution carrier
         run: pnpm add -Dw --lockfile=false babel-plugin-react-compiler@latest react-compiler-runtime@latest
