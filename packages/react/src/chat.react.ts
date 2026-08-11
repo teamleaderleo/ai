@@ -50,7 +50,14 @@ class ReactChatState<
   }
 
   pushMessage = (message: UI_MESSAGE) => {
-    this.#messages = this.#messages.concat(message);
+    // Assistant messages are backed by mutable streaming state. Snapshot the
+    // first publication just like later replacements so a previously returned
+    // React external-store snapshot cannot change underneath its consumer.
+    // User messages are already caller-owned values and keep their existing
+    // append semantics.
+    this.#messages = this.#messages.concat(
+      message.role === 'assistant' ? this.snapshot(message) : message,
+    );
     this.#callMessagesCallbacks();
   };
 
