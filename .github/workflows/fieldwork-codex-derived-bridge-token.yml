@@ -27,7 +27,7 @@ jobs:
           echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
           echo "source head: $source_head"
       - run: pnpm install --frozen-lockfile
-      - name: Materialize adapter-side reconstruction prototype
+      - name: Tighten lifecycle schema to deterministic sessions only
         run: |
           python <<'PY'
           from pathlib import Path
@@ -35,73 +35,66 @@ jobs:
           path = Path('packages/harness-codex/src/codex-harness.ts')
           text = path.read_text()
 
-          if 'const resolveDerivedBridgeToken = (): string | undefined =>' not in text:
+          if 'codexDerivedResumeStateSchema' not in text:
               def replace_once(old: str, new: str) -> None:
                   global text
                   count = text.count(old)
                   if count != 1:
                       raise SystemExit(
-                          f'expected one source match, found {count}: {old[:80]!r}'
+                          f'expected one source match, found {count}: {old[:100]!r}'
                       )
                   text = text.replace(old, new, 1)
 
               replace_once(
-                  '  token: z.string(),\n  lastSeenEventId: z.number(),',
-                  '  token: z.string().optional(),\n  lastSeenEventId: z.number(),',
-              )
-              replace_once(
-                  '      const timeoutMs = settings.startupTimeoutMs ?? 120_000;\n',
-                  "      const timeoutMs = settings.startupTimeoutMs ?? 120_000;\n"
-                  "      let derivedBridgeToken: string | undefined;\n"
-                  "      const resolveDerivedBridgeToken = (): string | undefined => {\n"
-                  "        if (settings.mintBridgeToken == null) return undefined;\n"
-                  "        if (derivedBridgeToken === undefined) {\n"
-                  "          derivedBridgeToken = settings.mintBridgeToken(sandboxId);\n"
-                  "        }\n"
-                  "        return derivedBridgeToken;\n"
-                  "      };\n",
-              )
-              replace_once(
-                  '      if (coords) {\n        try {\n',
-                  "      const attachToken =\n"
-                  "        coords == null\n"
-                  "          ? undefined\n"
-                  "          : (coords.token ?? resolveDerivedBridgeToken());\n"
-                  "      if (coords != null && attachToken == null) {\n"
-                  "        throw new HarnessCapabilityUnsupportedError({\n"
-                  "          harnessId: 'codex',\n"
-                  "          message:\n"
-                  "            'Codex live bridge resume state is missing its authentication token and deterministic minting is not configured.',\n"
-                  "        });\n"
-                  "      }\n\n"
-                  "      if (coords) {\n"
-                  "        try {\n",
-              )
-              replace_once(
-                  '${encodeURIComponent(coords.token)}`;',
-                  '${encodeURIComponent(attachToken!)}`;',
-              )
-              replace_once(
-                  '            bridgeToken: coords.token,',
-                  '            bridgeToken: attachToken!,',
-              )
-              replace_once(
-                  "      const token =\n"
-                  "        settings.mintBridgeToken == null\n"
-                  "          ? randomBytes(32).toString('hex')\n"
-                  "          : settings.mintBridgeToken(sandboxId);",
-                  "      const token =\n"
-                  "        settings.mintBridgeToken == null\n"
-                  "          ? randomBytes(32).toString('hex')\n"
-                  "          : resolveDerivedBridgeToken()!;",
-              )
+                  """const codexBridgeCoordsSchema = z.object({
+  port: z.number(),
+  token: z.string().optional(),
+  lastSeenEventId: z.number(),
+  sandboxId: z.string().optional(),
+});""",
+                  """const codexBridgeCoordsSchema = z.object({
+  port: z.number(),
+  token: z.string(),
+  lastSeenEventId: z.number(),
+  sandboxId: z.string().optional(),
+});
 
+const codexDerivedBridgeCoordsSchema = codexBridgeCoordsSchema.extend({
+  token: z.string().optional(),
+});""",
+              )
+              replace_once(
+                  """const codexResumeStateSchema = z.object({
+  threadId: z.string().optional(),
+  bridge: codexBridgeCoordsSchema.optional(),
+});
+
+type CodexBridgeCoords = z.infer<typeof codexBridgeCoordsSchema>;""",
+                  """const codexResumeStateSchema = z.object({
+  threadId: z.string().optional(),
+  bridge: codexBridgeCoordsSchema.optional(),
+});
+
+const codexDerivedResumeStateSchema = z.object({
+  threadId: z.string().optional(),
+  bridge: codexDerivedBridgeCoordsSchema.optional(),
+});
+
+type CodexBridgeCoords = z.infer<typeof codexDerivedBridgeCoordsSchema>;""",
+              )
+              replace_once(
+                  '    lifecycleStateSchema: codexResumeStateSchema,',
+                  """    lifecycleStateSchema:
+      settings.mintBridgeToken == null
+        ? codexResumeStateSchema
+        : codexDerivedResumeStateSchema,""",
+              )
               path.write_text(text)
           PY
-      - name: Fence and publish candidate generation
+      - name: Fence and publish repaired candidate generation
         run: |
           if git diff --quiet; then
-            echo 'adapter prototype already materialized'
+            echo 'schema repair already materialized'
           else
             actual="$(git diff --name-only)"
             echo "changed files: $actual"
@@ -116,7 +109,7 @@ jobs:
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add packages/harness-codex/src/codex-harness.ts
-            git commit -m 'Prototype deterministic bridge-token reconstruction'
+            git commit -m 'Keep random bridge-token resume state strict'
             git push origin HEAD:candidate/codex-derived-bridge-token-current
           fi
 
