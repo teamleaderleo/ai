@@ -11,13 +11,15 @@ const GLOBAL_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
 const EU_URL = 'https://eu-texttospeech.googleapis.com/v1/text:synthesize';
 const US_URL = 'https://us-texttospeech.googleapis.com/v1/text:synthesize';
 
+type CloudTTSUrl = typeof GLOBAL_URL | typeof EU_URL | typeof US_URL;
+
 const server = createTestServer({
   [GLOBAL_URL]: {},
   [EU_URL]: {},
   [US_URL]: {},
 });
 
-function prepareResponse(url: string) {
+function prepareResponse(url: CloudTTSUrl) {
   server.urls[url].response = {
     type: 'json-value',
     body: { audioContent: 'AQID' },
