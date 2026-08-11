@@ -1,0 +1,36 @@
+name: Fieldwork Harness Claude Code
+
+on:
+  push:
+    branches:
+      - fieldwork/788-bridge-token-resume-state-tests
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness-claude-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness package dependencies
+        run: pnpm exec turbo build --filter=@ai-sdk/harness-claude-code...
+
+      - name: Run harness-claude-code tests
+        run: pnpm --filter @ai-sdk/harness-claude-code test
