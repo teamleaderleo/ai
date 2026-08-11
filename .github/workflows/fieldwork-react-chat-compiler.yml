@@ -1,0 +1,44 @@
+name: Fieldwork React chat compiler characterization
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  react-chat-compiler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install repository dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build React package dependency closure
+        run: pnpm --filter @ai-sdk/react... build
+
+      - name: Type-check React package
+        run: pnpm --filter @ai-sdk/react type-check
+
+      - name: Run bounded publication target test
+        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react.test.ts
+
+      - name: Install React Compiler only for this execution carrier
+        run: pnpm add -Dw --lockfile=false babel-plugin-react-compiler@latest react-compiler-runtime@latest
+
+      - name: Record compiler versions
+        run: pnpm list -w babel-plugin-react-compiler react-compiler-runtime
+
+      - name: Run compiler-sensitive discriminator
+        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.react-compiler.config.js --run
