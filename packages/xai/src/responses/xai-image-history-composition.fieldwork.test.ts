@@ -3,7 +3,7 @@ import { convertToModelMessages } from '../../../ai/src/ui/convert-to-model-mess
 import { convertToXaiResponsesInput } from './convert-to-xai-responses-input';
 
 describe('Fieldwork: xAI generated-image persisted history composition', () => {
-  it('round-trips a completed provider-executed image generation item from persisted UI history', async () => {
+  it('preserves the completed image tool in core history but drops it at the xAI request boundary', async () => {
     const modelMessages = await convertToModelMessages([
       {
         role: 'user',
@@ -54,14 +54,24 @@ describe('Fieldwork: xAI generated-image persisted history composition', () => {
       prompt: modelMessages,
     });
 
-    expect(input).toContainEqual({
-      type: 'image_generation_call',
-      id: 'ig_123',
-      status: 'completed',
-      prompt: 'a red cube',
-      result: 'base64-image-data',
-    });
+    expect(input).not.toContainEqual(
+      expect.objectContaining({
+        type: 'image_generation_call',
+        id: 'ig_123',
+      }),
+    );
+    expect(input).not.toContainEqual(
+      expect.objectContaining({
+        type: 'function_call',
+        id: 'ig_123',
+      }),
+    );
 
+    expect(input).toContainEqual({
+      role: 'assistant',
+      content: 'Here is the cube.',
+      id: undefined,
+    });
     expect(input).toContainEqual({
       role: 'user',
       content: [{ type: 'input_text', text: 'make it blue' }],
