@@ -28,33 +28,56 @@ jobs:
           cache: pnpm
 
       - name: Install repository dependencies
+        id: install
         run: pnpm install --frozen-lockfile
 
       - name: Build React dependency closure
+        id: build
         run: pnpm --filter @ai-sdk/react... build
 
       - name: Type-check React package
+        id: typecheck
         run: pnpm --filter @ai-sdk/react type-check
 
       - name: Run bounded publication target test
-        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react.test.ts
+        id: target_test
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react.test.ts 2>&1 | tee /tmp/fieldwork-target-test.log
 
       - name: Install compiler dependencies for this carrier only
+        id: compiler_install
         run: pnpm add -Dw --lockfile=false babel-plugin-react-compiler@latest react-compiler-runtime@latest
 
       - name: Record compiler dependency versions
-        run: pnpm list -w babel-plugin-react-compiler react-compiler-runtime
+        id: versions
+        shell: bash
+        run: pnpm list -w babel-plugin-react-compiler react-compiler-runtime 2>&1 | tee /tmp/fieldwork-compiler-versions.log
 
       - name: Run React Compiler discriminator
-        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.react-compiler.config.js --run
+        id: compiler_test
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm --filter @ai-sdk/react exec vitest --config vitest.react-compiler.config.js --run 2>&1 | tee /tmp/fieldwork-compiler-test.log
 
       - name: Publish execution receipt to canonical PR
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
+          TARGET_TEST_OUTCOME: ${{ steps.target_test.outcome }}
+          COMPILER_INSTALL_OUTCOME: ${{ steps.compiler_install.outcome }}
+          VERSIONS_OUTCOME: ${{ steps.versions.outcome }}
+          COMPILER_TEST_OUTCOME: ${{ steps.compiler_test.outcome }}
         run: |
-          versions="$(pnpm list -w babel-plugin-react-compiler react-compiler-runtime 2>&1 || true)"
+          versions="$(cat /tmp/fieldwork-compiler-versions.log 2>/dev/null || true)"
+          target_tail="$(tail -n 40 /tmp/fieldwork-target-test.log 2>/dev/null || true)"
+          compiler_tail="$(tail -n 60 /tmp/fieldwork-compiler-test.log 2>/dev/null || true)"
           body=$(cat <<EOF
           FIELDWORK EXECUTION RECEIPT
           Campaign: teamleaderleo/fieldwork#851
@@ -63,12 +86,31 @@ jobs:
           Result: ${JOB_STATUS}
           Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
+          Step outcomes:
+          - install: ${INSTALL_OUTCOME}
+          - build: ${BUILD_OUTCOME}
+          - type-check: ${TYPECHECK_OUTCOME}
+          - bounded target test: ${TARGET_TEST_OUTCOME}
+          - compiler install: ${COMPILER_INSTALL_OUTCOME}
+          - compiler versions: ${VERSIONS_OUTCOME}
+          - compiler discriminator: ${COMPILER_TEST_OUTCOME}
+
           Compiler dependencies:
           \\`\\`\\`
           ${versions}
           \\`\\`\\`
 
-          Evidence scope: focused owned-fork execution only. See the workflow steps for the React dependency build, package type-check, bounded publication target test, and compiler-sensitive discriminator.
+          Bounded target-test tail:
+          \\`\\`\\`
+          ${target_tail}
+          \\`\\`\\`
+
+          Compiler-test tail:
+          \\`\\`\\`
+          ${compiler_tail}
+          \\`\\`\\`
+
+          Evidence scope: focused owned-fork execution only. The canonical source remains #91; this carrier adds temporary compiler test/config/workflow files only.
           EOF
           )
           gh pr comment 91 --body "$body"
