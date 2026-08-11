@@ -51,20 +51,20 @@ jobs:
   headers?: Resolvable<Record<string, string | undefined>>;""",
                   """interface GoogleVertexCloudTTSSpeechModelConfig {
   provider: string;
-  location: string;
+  /** Cloud TTS location. Optional for workflow payloads serialized before this field existed. */
+  location?: string;
   headers?: Resolvable<Record<string, string | undefined>>;""",
               )
               speech = replace_once(
                   speech,
                   """// Cloud Text-to-Speech uses a single non-regional host for standard
 // synthesis (unlike Speech-to-Text and Vertex AI, which are regional).
-// https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
+// https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text:synthesize
 const CLOUD_TTS_SYNTHESIZE_URL =
   'https://texttospeech.googleapis.com/v1/text:synthesize';""",
                   """// Chirp 3 HD currently supports these non-global Cloud TTS locations.
-// Keep unsupported Vertex locations on the existing global endpoint so adding
-// regional routing does not turn a working global request into an unsupported
-// regional Chirp request.
+// Keep unsupported or older serialized locations on the existing global
+// endpoint so regional routing does not break previously working requests.
 const CHIRP3_HD_REGIONAL_LOCATIONS = new Set([
   'us',
   'eu',
@@ -73,10 +73,11 @@ const CHIRP3_HD_REGIONAL_LOCATIONS = new Set([
   'asia-northeast1',
 ]);
 
-function resolveCloudTTSSynthesizeUrl(location: string): string {
-  const host = CHIRP3_HD_REGIONAL_LOCATIONS.has(location)
-    ? `${location}-texttospeech.googleapis.com`
-    : 'texttospeech.googleapis.com';
+function resolveCloudTTSSynthesizeUrl(location?: string): string {
+  const host =
+    location != null && CHIRP3_HD_REGIONAL_LOCATIONS.has(location)
+      ? `${location}-texttospeech.googleapis.com`
+      : 'texttospeech.googleapis.com';
 
   return `https://${host}/v1/text:synthesize`;
 }""",
