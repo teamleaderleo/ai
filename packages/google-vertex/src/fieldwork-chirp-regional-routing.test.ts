@@ -4,23 +4,42 @@ import { createGoogleVertex } from './google-vertex-provider-base';
 const GLOBAL_TTS_URL =
   'https://texttospeech.googleapis.com/v1/text:synthesize';
 
-describe('Fieldwork: Google Vertex Chirp regional routing', () => {
-  it('routes Chirp through the global Cloud TTS endpoint even when provider location is eu', async () => {
-    let requestUrl: string | undefined;
+function createCapturingFetch(onUrl: (url: string) => void) {
+  return async (input: RequestInfo | URL) => {
+    onUrl(input.toString());
+    return new Response(JSON.stringify({ audioContent: 'AQIDBAUGBwg=' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+}
 
+describe('Fieldwork: Google Vertex Chirp regional routing', () => {
+  for (const location of ['eu', 'us'] as const) {
+    it(`routes Chirp through the global Cloud TTS endpoint even when provider location is ${location}`, async () => {
+      let requestUrl: string | undefined;
+      const provider = createGoogleVertex({
+        project: 'fieldwork-project',
+        location,
+        fetch: createCapturingFetch(url => {
+          requestUrl = url;
+        }),
+      });
+
+      await provider.speech('chirp-3-hd').doGenerate({ text: 'hello' });
+
+      expect(requestUrl).toBe(GLOBAL_TTS_URL);
+    });
+  }
+
+  it('uses the global Cloud TTS endpoint for global location', async () => {
+    let requestUrl: string | undefined;
     const provider = createGoogleVertex({
       project: 'fieldwork-project',
-      location: 'eu',
-      fetch: async input => {
-        requestUrl = input.toString();
-        return new Response(
-          JSON.stringify({ audioContent: 'AQIDBAUGBwg=' }),
-          {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          },
-        );
-      },
+      location: 'global',
+      fetch: createCapturingFetch(url => {
+        requestUrl = url;
+      }),
     });
 
     await provider.speech('chirp-3-hd').doGenerate({ text: 'hello' });
@@ -28,23 +47,15 @@ describe('Fieldwork: Google Vertex Chirp regional routing', () => {
     expect(requestUrl).toBe(GLOBAL_TTS_URL);
   });
 
-  it('also bypasses an explicitly configured Vertex baseURL', async () => {
+  it('keeps Cloud TTS routing independent from the Vertex baseURL option', async () => {
     let requestUrl: string | undefined;
-
     const provider = createGoogleVertex({
       project: 'fieldwork-project',
       location: 'eu',
       baseURL: 'https://vertex-proxy.example.test/v1',
-      fetch: async input => {
-        requestUrl = input.toString();
-        return new Response(
-          JSON.stringify({ audioContent: 'AQIDBAUGBwg=' }),
-          {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          },
-        );
-      },
+      fetch: createCapturingFetch(url => {
+        requestUrl = url;
+      }),
     });
 
     await provider.speech('chirp-3-hd').doGenerate({ text: 'hello' });
