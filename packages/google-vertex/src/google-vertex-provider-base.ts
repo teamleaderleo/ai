@@ -167,7 +167,7 @@ export interface GoogleVertexProviderSettings {
    * - A headers object
    * - A Promise that resolves to a headers object
    * - A function that returns a headers object
-   * - A function that returns a Promise of a headers object
+   * - A function that returns a Promise of headers object
    */
   headers?: Resolvable<Record<string, string | undefined>>;
 
@@ -339,6 +339,7 @@ export function createGoogleVertex(
       const config = createConfig('speech');
       return new GoogleVertexCloudTTSSpeechModel(modelId, {
         provider: config.provider,
+        location: loadGoogleVertexLocation(),
         headers: config.headers,
         fetch: config.fetch,
       });
