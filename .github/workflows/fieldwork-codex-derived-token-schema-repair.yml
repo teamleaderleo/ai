@@ -1,0 +1,122 @@
+name: Fieldwork Codex derived token schema repair
+
+on:
+  pull_request:
+    branches:
+      - candidate/codex-derived-bridge-token-current
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/codex-derived-bridge-token-current
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Capture source generation
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
+          echo "source head: $source_head"
+      - run: pnpm install --frozen-lockfile
+      - name: Apply conditional lifecycle schema
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/harness-codex/src/codex-harness.ts')
+          text = path.read_text()
+
+          if 'codexDerivedResumeStateSchema' not in text:
+              def replace_once(old: str, new: str) -> None:
+                  global text
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'expected one source match, found {count}: {old[:100]!r}')
+                  text = text.replace(old, new, 1)
+
+              replace_once(
+                  """const codexBridgeCoordsSchema = z.object({
+  port: z.number(),
+  token: z.string().optional(),
+  lastSeenEventId: z.number(),
+  sandboxId: z.string().optional(),
+});""",
+                  """const codexBridgeCoordsSchema = z.object({
+  port: z.number(),
+  token: z.string(),
+  lastSeenEventId: z.number(),
+  sandboxId: z.string().optional(),
+});
+
+const codexDerivedBridgeCoordsSchema = codexBridgeCoordsSchema.extend({
+  token: z.string().optional(),
+});""",
+              )
+              replace_once(
+                  """const codexResumeStateSchema = z.object({
+  threadId: z.string().optional(),
+  bridge: codexBridgeCoordsSchema.optional(),
+});
+
+type CodexBridgeCoords = z.infer<typeof codexBridgeCoordsSchema>;""",
+                  """const codexResumeStateSchema = z.object({
+  threadId: z.string().optional(),
+  bridge: codexBridgeCoordsSchema.optional(),
+});
+
+const codexDerivedResumeStateSchema = z.object({
+  threadId: z.string().optional(),
+  bridge: codexDerivedBridgeCoordsSchema.optional(),
+});
+
+type CodexBridgeCoords = z.infer<typeof codexDerivedBridgeCoordsSchema>;""",
+              )
+              replace_once(
+                  '    lifecycleStateSchema: codexResumeStateSchema,',
+                  """    lifecycleStateSchema:
+      settings.mintBridgeToken == null
+        ? codexResumeStateSchema
+        : codexDerivedResumeStateSchema,""",
+              )
+              path.write_text(text)
+          PY
+      - name: Fence and publish repaired candidate
+        run: |
+          actual="$(git diff --name-only)"
+          echo "changed files: $actual"
+          test "$actual" = 'packages/harness-codex/src/codex-harness.ts'
+          git diff --check
+
+          git fetch origin candidate/codex-derived-bridge-token-current
+          remote_head="$(git rev-parse origin/candidate/codex-derived-bridge-token-current)"
+          echo "remote source head before publication: $remote_head"
+          test "$remote_head" = "$SOURCE_HEAD"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packages/harness-codex/src/codex-harness.ts
+          git commit -m 'Keep random bridge-token resume state strict'
+          git push origin HEAD:candidate/codex-derived-bridge-token-current
+
+          final_head="$(git rev-parse HEAD)"
+          echo "FINAL_SOURCE_HEAD=$final_head" >> "$GITHUB_ENV"
+          echo "final source head: $final_head"
+      - name: Codex harness type check
+        run: pnpm -C packages/harness-codex type-check
+      - name: Codex harness Node tests
+        run: pnpm -C packages/harness-codex test:node
+      - name: Final source fence
+        run: |
+          echo "validated source head: $FINAL_SOURCE_HEAD"
+          test "$(git rev-parse HEAD)" = "$FINAL_SOURCE_HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
