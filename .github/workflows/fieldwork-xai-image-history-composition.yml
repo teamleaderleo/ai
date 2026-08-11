@@ -1,0 +1,29 @@
+name: Fieldwork xAI image history composition
+
+on:
+  pull_request:
+    branches:
+      - research/xai-image-history-composition-7d40
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Source fence
+        run: git diff --check
+      - name: xAI package type check
+        run: pnpm -C packages/xai type-check
+      - name: Focused persisted-history composition probe
+        run: pnpm -C packages/xai exec vitest --config vitest.node.config.js --run src/responses/xai-image-history-composition.fieldwork.test.ts
+      - name: Existing xAI Node package tests
+        run: pnpm -C packages/xai exec vitest --config vitest.node.config.js --run --exclude src/responses/xai-image-history-composition.fieldwork.test.ts
