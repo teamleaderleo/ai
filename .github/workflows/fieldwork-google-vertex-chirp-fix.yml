@@ -1,0 +1,148 @@
+name: Fieldwork Google Vertex Chirp fix
+
+on:
+  pull_request:
+    branches:
+      - candidate/google-vertex-chirp-regional-routing-7d40
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/google-vertex-chirp-regional-routing-7d40
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Capture source generation
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
+          echo "source head: $source_head"
+      - run: pnpm install --frozen-lockfile
+      - name: Materialize supported regional Cloud TTS routing
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          speech_path = Path('packages/google-vertex/src/google-vertex-cloud-tts-speech-model.ts')
+          speech = speech_path.read_text()
+          provider_path = Path('packages/google-vertex/src/google-vertex-provider-base.ts')
+          provider = provider_path.read_text()
+
+          if 'CHIRP3_HD_REGIONAL_LOCATIONS' not in speech:
+              def replace_once(text: str, old: str, new: str) -> str:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'expected one source match, found {count}: {old[:100]!r}')
+                  return text.replace(old, new, 1)
+
+              speech = replace_once(
+                  speech,
+                  """interface GoogleVertexCloudTTSSpeechModelConfig {
+  provider: string;
+  headers?: Resolvable<Record<string, string | undefined>>;""",
+                  """interface GoogleVertexCloudTTSSpeechModelConfig {
+  provider: string;
+  location: string;
+  headers?: Resolvable<Record<string, string | undefined>>;""",
+              )
+              speech = replace_once(
+                  speech,
+                  """// Cloud Text-to-Speech uses a single non-regional host for standard
+// synthesis (unlike Speech-to-Text and Vertex AI, which are regional).
+// https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
+const CLOUD_TTS_SYNTHESIZE_URL =
+  'https://texttospeech.googleapis.com/v1/text:synthesize';""",
+                  """// Chirp 3 HD currently supports these non-global Cloud TTS locations.
+// Keep unsupported Vertex locations on the existing global endpoint so adding
+// regional routing does not turn a working global request into an unsupported
+// regional Chirp request.
+const CHIRP3_HD_REGIONAL_LOCATIONS = new Set([
+  'us',
+  'eu',
+  'asia-southeast1',
+  'europe-west2',
+  'asia-northeast1',
+]);
+
+function resolveCloudTTSSynthesizeUrl(location: string): string {
+  const host = CHIRP3_HD_REGIONAL_LOCATIONS.has(location)
+    ? `${location}-texttospeech.googleapis.com`
+    : 'texttospeech.googleapis.com';
+
+  return `https://${host}/v1/text:synthesize`;
+}""",
+              )
+              speech = replace_once(
+                  speech,
+                  '      url: CLOUD_TTS_SYNTHESIZE_URL,',
+                  '      url: resolveCloudTTSSynthesizeUrl(this.config.location),',
+              )
+              provider = replace_once(
+                  provider,
+                  """      return new GoogleVertexCloudTTSSpeechModel(modelId, {
+        provider: config.provider,
+        headers: config.headers,
+        fetch: config.fetch,
+      });""",
+                  """      return new GoogleVertexCloudTTSSpeechModel(modelId, {
+        provider: config.provider,
+        location: loadGoogleVertexLocation(),
+        headers: config.headers,
+        fetch: config.fetch,
+      });""",
+              )
+
+              speech_path.write_text(speech)
+              provider_path.write_text(provider)
+          PY
+      - name: Fence and publish candidate generation
+        run: |
+          if git diff --quiet; then
+            echo 'regional routing candidate already materialized'
+          else
+            actual="$(git diff --name-only | sort)"
+            expected="$(printf '%s\n' \
+              'packages/google-vertex/src/google-vertex-cloud-tts-speech-model.ts' \
+              'packages/google-vertex/src/google-vertex-provider-base.ts' | sort)"
+            echo "changed files:"
+            echo "$actual"
+            test "$actual" = "$expected"
+            git diff --check
+
+            git fetch origin candidate/google-vertex-chirp-regional-routing-7d40
+            remote_head="$(git rev-parse origin/candidate/google-vertex-chirp-regional-routing-7d40)"
+            test "$remote_head" = "$SOURCE_HEAD"
+
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add \
+              packages/google-vertex/src/google-vertex-cloud-tts-speech-model.ts \
+              packages/google-vertex/src/google-vertex-provider-base.ts
+            git commit -m 'Honor supported Cloud TTS regions for Chirp'
+            git push origin HEAD:candidate/google-vertex-chirp-regional-routing-7d40
+          fi
+
+          final_head="$(git rev-parse HEAD)"
+          echo "FINAL_SOURCE_HEAD=$final_head" >> "$GITHUB_ENV"
+          echo "final source head: $final_head"
+      - name: Google Vertex type check
+        run: pnpm -C packages/google-vertex type-check
+      - name: Google Vertex Node tests
+        run: pnpm -C packages/google-vertex test:node
+      - name: Google Vertex Edge tests
+        run: pnpm -C packages/google-vertex test:edge
+      - name: Final exact-head fence
+        run: |
+          echo "validated source head: $FINAL_SOURCE_HEAD"
+          test "$(git rev-parse HEAD)" = "$FINAL_SOURCE_HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
