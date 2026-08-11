@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   react-chat-compiler:
@@ -45,3 +47,28 @@ jobs:
 
       - name: Run React Compiler discriminator
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.react-compiler.config.js --run
+
+      - name: Publish execution receipt to canonical PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          versions="$(pnpm list -w babel-plugin-react-compiler react-compiler-runtime 2>&1 || true)"
+          body=$(cat <<EOF
+          FIELDWORK EXECUTION RECEIPT
+          Campaign: teamleaderleo/fieldwork#851
+          Canonical source: #91@879d691d0bb81455cdbc3edb4fffdf9906d28b5a
+          Execution head: ${GITHUB_SHA}
+          Result: ${JOB_STATUS}
+          Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Compiler dependencies:
+          \\`\\`\\`
+          ${versions}
+          \\`\\`\\`
+
+          Evidence scope: focused owned-fork execution only. See the workflow steps for the React dependency build, package type-check, bounded publication target test, and compiler-sensitive discriminator.
+          EOF
+          )
+          gh pr comment 91 --body "$body"
