@@ -1,0 +1,31 @@
+name: Fieldwork Claude external MCP permission candidate
+
+on:
+  pull_request:
+    branches:
+      - candidate/claude-external-mcp-permission-7d40
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Source fence
+        run: git diff --check
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Build host and sandbox bridge entries
+        run: pnpm -C packages/harness-claude-code build
+      - name: Focused external MCP permission regression
+        run: pnpm -C packages/harness-claude-code exec vitest --config vitest.node.config.js --run src/bridge/external-mcp-permission-boundary.test.ts
+      - name: Full Node package tests
+        run: pnpm -C packages/harness-claude-code test:node
