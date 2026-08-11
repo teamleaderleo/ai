@@ -10,7 +10,7 @@ import {
   type UIMessage,
   type UIMessageChunk,
 } from 'ai';
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Chat } from './chat.react';
 import { useChat } from './use-chat';
