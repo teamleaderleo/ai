@@ -40,8 +40,27 @@ function toolOutputBytes(value: unknown): number {
   }, 0);
 }
 
+type Publication = {
+  messages: UIMessage[];
+  observedText: string | undefined;
+  observedOutput: unknown;
+};
+
+function readPublication(messages: UIMessage[]): Publication {
+  const assistant = messages.at(-1);
+  const textPart = assistant?.parts.find(part => part.type === 'text');
+  const outputPart = assistant?.parts.find(part => 'output' in part);
+
+  return {
+    messages,
+    observedText: textPart?.type === 'text' ? textPart.text : undefined,
+    observedOutput:
+      outputPart && 'output' in outputPart ? outputPart.output : undefined,
+  };
+}
+
 describe('React Chat publication snapshots', () => {
-  it('copies mutable message and part shells without repeatedly cloning tool output payloads', async () => {
+  it('copies replacement message and part shells without repeatedly cloning tool output payloads', async () => {
     const output = { payload: 'x'.repeat(64 * 1024) };
     const originalStructuredClone = globalThis.structuredClone;
     let clonedToolOutputBytes = 0;
@@ -92,9 +111,9 @@ describe('React Chat publication snapshots', () => {
       transport,
     });
 
-    const snapshots: UIMessage[][] = [];
+    const publications: Publication[] = [];
     const unsubscribe = chat['~registerMessagesCallback'](() => {
-      snapshots.push(chat.messages);
+      publications.push(readPublication(chat.messages));
     });
 
     try {
@@ -106,44 +125,41 @@ describe('React Chat publication snapshots', () => {
 
     expect(clonedToolOutputBytes).toBe(0);
 
-    const assistantSnapshots = snapshots
-      .map(messages => messages.at(-1))
-      .filter(
-        (message): message is UIMessage => message?.role === 'assistant',
-      );
-
-    const withOutput = assistantSnapshots.find(message =>
-      message.parts.some(
-        part => 'output' in part && (part as { output?: unknown }).output === output,
-      ),
+    // Select publications by what the subscriber observed at callback time.
+    // The first new-assistant publication currently aliases mutable response
+    // state (tracked separately in Fieldwork #852), so selecting by the
+    // retained object's final contents would conflate that earlier publication
+    // with later replacement snapshots.
+    const withOutput = publications.find(
+      publication => publication.observedOutput === output,
     );
-    const withFirstTextDelta = assistantSnapshots.find(message =>
-      message.parts.some(
-        part => part.type === 'text' && part.text === 'a',
-      ),
+    const withFirstTextDelta = publications.find(
+      publication => publication.observedText === 'a',
     );
-    const withSecondTextDelta = assistantSnapshots.find(message =>
-      message.parts.some(
-        part => part.type === 'text' && part.text === 'ab',
-      ),
+    const withSecondTextDelta = publications.find(
+      publication => publication.observedText === 'ab',
     );
 
     expect(withOutput).toBeDefined();
     expect(withFirstTextDelta).toBeDefined();
     expect(withSecondTextDelta).toBeDefined();
 
-    const outputPart = withOutput!.parts.find(part => 'output' in part)!;
-    const laterOutputPart = withSecondTextDelta!.parts.find(
+    const outputMessage = withOutput!.messages.at(-1)!;
+    const firstTextMessage = withFirstTextDelta!.messages.at(-1)!;
+    const secondTextMessage = withSecondTextDelta!.messages.at(-1)!;
+
+    const outputPart = outputMessage.parts.find(part => 'output' in part)!;
+    const laterOutputPart = secondTextMessage.parts.find(
       part => 'output' in part,
     )!;
     expect(outputPart).not.toBe(laterOutputPart);
     expect((outputPart as { output?: unknown }).output).toBe(output);
     expect((laterOutputPart as { output?: unknown }).output).toBe(output);
 
-    const firstTextPart = withFirstTextDelta!.parts.find(
+    const firstTextPart = firstTextMessage.parts.find(
       part => part.type === 'text',
     );
-    const secondTextPart = withSecondTextDelta!.parts.find(
+    const secondTextPart = secondTextMessage.parts.find(
       part => part.type === 'text',
     );
     expect(firstTextPart).not.toBe(secondTextPart);
