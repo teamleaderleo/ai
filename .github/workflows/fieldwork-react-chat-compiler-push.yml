@@ -46,6 +46,13 @@ jobs:
           set -o pipefail
           pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react.test.ts 2>&1 | tee /tmp/fieldwork-target-test.log
 
+      - name: Characterize first assistant publication aliasing
+        id: alias_test
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.first-publication-alias.fieldwork.test.ts 2>&1 | tee /tmp/fieldwork-alias-test.log
+
       - name: Install compiler dependencies for this carrier only
         id: compiler_install
         run: pnpm add -Dw --lockfile=false babel-plugin-react-compiler@latest react-compiler-runtime@latest
@@ -71,16 +78,19 @@ jobs:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
           TARGET_TEST_OUTCOME: ${{ steps.target_test.outcome }}
+          ALIAS_TEST_OUTCOME: ${{ steps.alias_test.outcome }}
           COMPILER_INSTALL_OUTCOME: ${{ steps.compiler_install.outcome }}
           VERSIONS_OUTCOME: ${{ steps.versions.outcome }}
           COMPILER_TEST_OUTCOME: ${{ steps.compiler_test.outcome }}
         run: |
           versions="$(cat /tmp/fieldwork-compiler-versions.log 2>/dev/null || true)"
           target_tail="$(tail -n 40 /tmp/fieldwork-target-test.log 2>/dev/null || true)"
+          alias_tail="$(tail -n 40 /tmp/fieldwork-alias-test.log 2>/dev/null || true)"
           compiler_tail="$(tail -n 60 /tmp/fieldwork-compiler-test.log 2>/dev/null || true)"
           body=$(cat <<EOF
           FIELDWORK EXECUTION RECEIPT
           Campaign: teamleaderleo/fieldwork#851
+          Adjacent lead: teamleaderleo/fieldwork#852
           Canonical source: #91@879d691d0bb81455cdbc3edb4fffdf9906d28b5a
           Execution head: ${GITHUB_SHA}
           Result: ${JOB_STATUS}
@@ -91,6 +101,7 @@ jobs:
           - build: ${BUILD_OUTCOME}
           - type-check: ${TYPECHECK_OUTCOME}
           - bounded target test: ${TARGET_TEST_OUTCOME}
+          - first-publication alias characterization: ${ALIAS_TEST_OUTCOME}
           - compiler install: ${COMPILER_INSTALL_OUTCOME}
           - compiler versions: ${VERSIONS_OUTCOME}
           - compiler discriminator: ${COMPILER_TEST_OUTCOME}
@@ -105,12 +116,17 @@ jobs:
           ${target_tail}
           \\`\\`\\`
 
+          First-publication alias-test tail:
+          \\`\\`\\`
+          ${alias_tail}
+          \\`\\`\\`
+
           Compiler-test tail:
           \\`\\`\\`
           ${compiler_tail}
           \\`\\`\\`
 
-          Evidence scope: focused owned-fork execution only. The canonical source remains #91; this carrier adds temporary compiler test/config/workflow files only.
+          Evidence scope: focused owned-fork execution only. The canonical #851 source remains #91; this carrier also contains one temporary characterization for adjacent lead #852.
           EOF
           )
           gh pr comment 91 --body "$body"
