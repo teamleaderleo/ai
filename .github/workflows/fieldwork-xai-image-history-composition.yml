@@ -24,6 +24,6 @@ jobs:
       - name: xAI package type check
         run: pnpm -C packages/xai type-check
       - name: Focused persisted-history composition probe
-        run: pnpm -C packages/xai exec vitest --config vitest.node.config.js --run src/responses/xai-image-history-composition.fieldwork.test.ts
+        run: pnpm exec vitest --run playgrounds/EXP-20260811-xai-image-history-composition/xai-image-history-composition.test.ts
       - name: Existing xAI Node package tests
-        run: pnpm -C packages/xai exec vitest --config vitest.node.config.js --run --exclude src/responses/xai-image-history-composition.fieldwork.test.ts
+        run: pnpm -C packages/xai test:node
