@@ -17,6 +17,7 @@ import type { GoogleVertexSpeechModelId } from './google-vertex-speech-model-opt
 
 interface GoogleVertexCloudTTSSpeechModelConfig {
   provider: string;
+  location?: string;
   headers?: Resolvable<Record<string, string | undefined>>;
   fetch?: FetchFunction;
   _internal?: {
@@ -31,12 +32,16 @@ const DEFAULT_LANGUAGE = 'en-US';
 // e.g. `en-US-Chirp3-HD-Kore`.
 // https://cloud.google.com/text-to-speech/docs/chirp3-hd
 const CHIRP3_HD_VOICE_INFIX = 'Chirp3-HD';
+const CLOUD_TTS_SYNTHESIZE_PATH = '/v1/text:synthesize';
 
-// Cloud Text-to-Speech uses a single non-regional host for standard
-// synthesis (unlike Speech-to-Text and Vertex AI, which are regional).
-// https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
-const CLOUD_TTS_SYNTHESIZE_URL =
-  'https://texttospeech.googleapis.com/v1/text:synthesize';
+function getCloudTTSSynthesizeUrl(location: string | undefined): string {
+  const host =
+    location === 'eu' || location === 'us'
+      ? `${location}-texttospeech.googleapis.com`
+      : 'texttospeech.googleapis.com';
+
+  return `https://${host}${CLOUD_TTS_SYNTHESIZE_PATH}`;
+}
 
 /**
  * Speech model for Chirp 3: HD voices on the Google Cloud Text-to-Speech API.
@@ -139,7 +144,7 @@ export class GoogleVertexCloudTTSSpeechModel implements SpeechModelV4 {
       responseHeaders,
       rawValue: rawResponse,
     } = await postJsonToApi({
-      url: CLOUD_TTS_SYNTHESIZE_URL,
+      url: getCloudTTSSynthesizeUrl(this.config.location),
       headers: combineHeaders(
         this.config.headers ? await resolve(this.config.headers) : undefined,
         options.headers,

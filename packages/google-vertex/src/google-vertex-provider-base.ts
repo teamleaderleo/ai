@@ -339,6 +339,7 @@ export function createGoogleVertex(
       const config = createConfig('speech');
       return new GoogleVertexCloudTTSSpeechModel(modelId, {
         provider: config.provider,
+        location: loadGoogleVertexLocation(),
         headers: config.headers,
         fetch: config.fetch,
       });
