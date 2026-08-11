@@ -38,6 +38,11 @@ jobs:
       - name: Run first-publication alias characterization
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react-first-publication-alias.test.ts
 
+      - name: Characterize imperative tool-output ownership blocker
+        id: imperative_ownership
+        continue-on-error: true
+        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react-imperative-output-ownership.test.ts
+
       - name: Run ordinary React package test suite
         run: pnpm --filter @ai-sdk/react test
 
@@ -49,3 +54,9 @@ jobs:
 
       - name: Run compiler-sensitive discriminator
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.react-compiler.config.js --run
+
+      - name: Require ownership redesign before promotion
+        if: steps.imperative_ownership.outcome == 'failure'
+        run: |
+          echo 'Expected research blocker observed: the broad shallow replacement candidate does not detach imperative caller-owned tool output.'
+          echo 'Compiler results remain useful characterization, but #91 must stay draft until stream and imperative replacement ownership are separated.'
