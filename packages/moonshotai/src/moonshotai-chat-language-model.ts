@@ -1,13 +1,14 @@
-import type {
-  APICallError,
-  LanguageModelV4,
-  LanguageModelV4CallOptions,
-  LanguageModelV4Content,
-  LanguageModelV4FinishReason,
-  LanguageModelV4GenerateResult,
-  LanguageModelV4StreamPart,
-  LanguageModelV4StreamResult,
-  SharedV4Warning,
+import {
+  UnsupportedFunctionalityError,
+  type APICallError,
+  type LanguageModelV4,
+  type LanguageModelV4CallOptions,
+  type LanguageModelV4Content,
+  type LanguageModelV4FinishReason,
+  type LanguageModelV4GenerateResult,
+  type LanguageModelV4StreamPart,
+  type LanguageModelV4StreamResult,
+  type SharedV4Warning,
 } from '@ai-sdk/provider';
 import {
   combineHeaders,
@@ -140,6 +141,17 @@ export class MoonshotAIChatLanguageModel implements LanguageModelV4 {
       toolChoice: moonshotToolChoice,
       toolWarnings,
     } = prepareTools({ tools, toolChoice });
+
+    if (
+      moonshotTools != null &&
+      moonshotTools.length > 0 &&
+      moonshotToolChoice === 'required' &&
+      (this.modelId === 'kimi-k2.5' || this.modelId === 'kimi-k2.6')
+    ) {
+      throw new UnsupportedFunctionalityError({
+        functionality: `tool choice "required" for model "${this.modelId}"`,
+      });
+    }
 
     // Thinking is configured through explicit provider options only.
     const thinking = moonshotOptions.thinking;
