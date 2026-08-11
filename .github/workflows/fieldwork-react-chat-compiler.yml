@@ -43,6 +43,11 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react-imperative-output-ownership.test.ts
 
+      - name: Characterize callback ownership blockers
+        id: callback_ownership
+        continue-on-error: true
+        run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react-callback-ownership.test.ts
+
       - name: Run ordinary React package test suite
         run: pnpm --filter @ai-sdk/react test
 
@@ -56,7 +61,7 @@ jobs:
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.react-compiler.config.js --run
 
       - name: Require ownership redesign before promotion
-        if: steps.imperative_ownership.outcome == 'failure'
+        if: steps.imperative_ownership.outcome == 'failure' || steps.callback_ownership.outcome == 'failure'
         run: |
-          echo 'Expected research blocker observed: the broad shallow replacement candidate does not detach imperative caller-owned tool output.'
-          echo 'Compiler results remain useful characterization, but #91 must stay draft until stream and imperative replacement ownership are separated.'
+          echo 'Expected research blocker observed: the broad shallow replacement candidate does not preserve every current publication ownership boundary.'
+          echo 'Compiler results remain useful characterization, but #91 must stay draft until stream publication and external-value ownership are separated.'
