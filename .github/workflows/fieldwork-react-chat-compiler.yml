@@ -9,6 +9,7 @@ permissions:
 jobs:
   react-chat-compiler:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -36,6 +37,9 @@ jobs:
 
       - name: Run first-publication alias characterization
         run: pnpm --filter @ai-sdk/react exec vitest --config vitest.config.js --run src/chat.react-first-publication-alias.test.ts
+
+      - name: Run ordinary React package test suite
+        run: pnpm --filter @ai-sdk/react test
 
       - name: Install React Compiler only for this execution carrier
         run: pnpm add -Dw --lockfile=false babel-plugin-react-compiler@latest react-compiler-runtime@latest
