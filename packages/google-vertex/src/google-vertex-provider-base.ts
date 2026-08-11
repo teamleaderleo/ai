@@ -167,7 +167,7 @@ export interface GoogleVertexProviderSettings {
    * - A headers object
    * - A Promise that resolves to a headers object
    * - A function that returns a headers object
-   * - A function that returns a Promise of headers object
+   * - A function that returns a Promise of a headers object
    */
   headers?: Resolvable<Record<string, string | undefined>>;
 
