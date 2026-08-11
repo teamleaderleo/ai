@@ -155,7 +155,7 @@ const BOOTSTRAP_DIR = '.harness-bootstrap/codex';
  */
 const codexBridgeCoordsSchema = z.object({
   port: z.number(),
-  token: z.string(),
+  token: z.string().optional(),
   lastSeenEventId: z.number(),
   sandboxId: z.string().optional(),
 });
@@ -257,6 +257,14 @@ export function createCodex(
       const cliShimDir = `${sessionDataDir}/codex`;
       const cliShimPath = `${cliShimDir}/${CLI_SHIM_FILENAME}`;
       const timeoutMs = settings.startupTimeoutMs ?? 120_000;
+      let derivedBridgeToken: string | undefined;
+      const resolveDerivedBridgeToken = (): string | undefined => {
+        if (settings.mintBridgeToken == null) return undefined;
+        if (derivedBridgeToken === undefined) {
+          derivedBridgeToken = settings.mintBridgeToken(sandboxId);
+        }
+        return derivedBridgeToken;
+      };
 
       // Normalize each forwarded bridge diagnostics frame into the general
       // `HarnessV1Diagnostic` and report it. The adapter does no telemetry work
@@ -284,13 +292,25 @@ export function createCodex(
        * bridge is gone the open throws and we fall through to a spawn-based
        * recovery.
        */
+      const attachToken =
+        coords == null
+          ? undefined
+          : (coords.token ?? resolveDerivedBridgeToken());
+      if (coords != null && attachToken == null) {
+        throw new HarnessCapabilityUnsupportedError({
+          harnessId: 'codex',
+          message:
+            'Codex live bridge resume state is missing its authentication token and deterministic minting is not configured.',
+        });
+      }
+
       if (coords) {
         try {
           const attachUrl =
             (await sandboxSession.getPortUrl({
               port: coords.port,
               protocol: 'ws',
-            })) + `?agent_bridge_token=${encodeURIComponent(coords.token)}`;
+            })) + `?agent_bridge_token=${encodeURIComponent(attachToken!)}`;
           const attachChannel: CodexChannel = new SandboxChannel({
             connect: () => openWebSocket(attachUrl),
             outboundSchema: outboundMessageSchema,
@@ -314,7 +334,7 @@ export function createCodex(
             seedResumeThreadOnFirstPrompt: false,
             rerunContinue: false,
             bridgePort: coords.port,
-            bridgeToken: coords.token,
+            bridgeToken: attachToken!,
             sandboxId,
             debug: startOpts.observability?.debug,
             permissionMode: startOpts.permissionMode,
@@ -351,7 +371,7 @@ export function createCodex(
       const token =
         settings.mintBridgeToken == null
           ? randomBytes(32).toString('hex')
-          : settings.mintBridgeToken(sandboxId);
+          : resolveDerivedBridgeToken()!;
       const codexSkillSetup =
         startOpts.skills && startOpts.skills.length > 0
           ? await writeCodexSkills({
