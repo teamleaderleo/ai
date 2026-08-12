@@ -1,4 +1,7 @@
-import type { LanguageModelV4Prompt } from '@ai-sdk/provider';
+import type {
+  LanguageModelV4Message,
+  LanguageModelV4Prompt,
+} from '@ai-sdk/provider';
 import { mockId } from '@ai-sdk/provider-utils/test';
 import { createTestServer } from '@ai-sdk/test-server/with-vitest';
 import { describe, expect, it } from 'vitest';
@@ -89,6 +92,8 @@ const finalResponse = {
   },
 };
 
+type AssistantMessage = Extract<LanguageModelV4Message, { role: 'assistant' }>;
+
 async function runTwoTurnRoundTrip(response: ReturnType<typeof firstResponse>) {
   server.urls[URL].response = { type: 'json-value', body: response };
 
@@ -99,32 +104,27 @@ async function runTwoTurnRoundTrip(response: ReturnType<typeof firstResponse>) {
 
   const first = await model.doGenerate({ prompt: initialPrompt });
 
-  const assistantContent = first.content.flatMap(part => {
-    switch (part.type) {
-      case 'reasoning':
-        return [
-          {
-            type: 'reasoning' as const,
-            text: part.text,
-            ...(part.providerMetadata != null
-              ? { providerOptions: part.providerMetadata }
-              : {}),
-          },
-        ];
-      case 'text':
-        return [
-          {
-            type: 'text' as const,
-            text: part.text,
-            ...(part.providerMetadata != null
-              ? { providerOptions: part.providerMetadata }
-              : {}),
-          },
-        ];
-      default:
-        return [];
+  const assistantContent: AssistantMessage['content'] = [];
+
+  for (const part of first.content) {
+    if (part.type === 'reasoning') {
+      assistantContent.push({
+        type: 'reasoning',
+        text: part.text,
+        ...(part.providerMetadata != null
+          ? { providerOptions: part.providerMetadata }
+          : {}),
+      });
+    } else if (part.type === 'text') {
+      assistantContent.push({
+        type: 'text',
+        text: part.text,
+        ...(part.providerMetadata != null
+          ? { providerOptions: part.providerMetadata }
+          : {}),
+      });
     }
-  });
+  }
 
   server.urls[URL].response = { type: 'json-value', body: finalResponse };
 
