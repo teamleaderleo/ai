@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check changed TypeScript formatting
+        run: pnpm exec oxfmt --check packages/xai/src/xai-video-model.ts packages/xai/src/xai-video-model-options.ts packages/xai/src/xai-video-file-id-inputs.test.ts
+
       - name: Type-check xAI
         run: pnpm --filter @ai-sdk/xai type-check
 
