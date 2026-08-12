@@ -116,6 +116,9 @@ function createPermissionOptions(input: {
 }): Record<string, unknown> {
   const permissionMode = input.start.permissionMode ?? 'allow-all';
   const inactiveNativeTools = new Set(input.inactiveNativeTools);
+  const externalMcpToolPrefixes = Object.keys(input.start.mcpServers ?? {}).map(
+    serverName => `mcp__${serverName}__`,
+  );
   const permissionSettings = createPermissionSettings({
     permissionMode,
     inactiveNativeTools,
@@ -137,7 +140,10 @@ function createPermissionOptions(input: {
       toolInput: Record<string, unknown>,
       options: { toolUseID: string },
     ) => {
-      if (toolName.startsWith('mcp__harness-tools__')) {
+      if (
+        toolName.startsWith('mcp__harness-tools__') ||
+        externalMcpToolPrefixes.some(prefix => toolName.startsWith(prefix))
+      ) {
         return { behavior: 'allow', updatedInput: toolInput };
       }
       if (
