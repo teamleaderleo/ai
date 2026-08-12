@@ -108,6 +108,7 @@ type Emit = (msg: Record<string, unknown>) => void;
 function createPermissionOptions(input: {
   start: StartMessage;
   inactiveNativeTools: readonly string[];
+  externalMcpToolPrefixes: readonly string[];
   turn: BridgeTurn;
   emit: Emit;
   finishApprovalStep: (approvalId: string) => void;
@@ -116,9 +117,6 @@ function createPermissionOptions(input: {
 }): Record<string, unknown> {
   const permissionMode = input.start.permissionMode ?? 'allow-all';
   const inactiveNativeTools = new Set(input.inactiveNativeTools);
-  const externalMcpToolPrefixes = Object.keys(input.start.mcpServers ?? {}).map(
-    serverName => `mcp__${serverName}__`,
-  );
   const permissionSettings = createPermissionSettings({
     permissionMode,
     inactiveNativeTools,
@@ -142,7 +140,7 @@ function createPermissionOptions(input: {
     ) => {
       if (
         toolName.startsWith('mcp__harness-tools__') ||
-        externalMcpToolPrefixes.some(prefix => toolName.startsWith(prefix))
+        input.externalMcpToolPrefixes.some(prefix => toolName.startsWith(prefix))
       ) {
         return { behavior: 'allow', updatedInput: toolInput };
       }
@@ -217,7 +215,8 @@ function nativeToolRequiresApproval(input: {
   permissionMode: 'allow-reads' | 'allow-edits' | 'allow-all';
 }): boolean {
   if (input.permissionMode === 'allow-all') return false;
-  const kind = NATIVE_TOOL_KINDS[input.nativeName] ?? 'edit';
+  const kind = NATIVE_TOOL_KINDS[input.nativeName];
+  if (kind == null) return true;
   if (input.permissionMode === 'allow-edits') return kind === 'bash';
   return kind === 'edit' || kind === 'bash';
 }
@@ -299,9 +298,13 @@ async function runTurn(start: StartMessage, turn: BridgeTurn): Promise<void> {
   const inactiveNativeTools = resolveInactiveNativeTools(
     start.builtinToolFiltering,
   );
+  const externalMcpToolPrefixes = Object.keys(start.mcpServers ?? {}).map(
+    serverName => `mcp__${serverName}__`,
+  );
   const permissionOptions = createPermissionOptions({
     start,
     inactiveNativeTools,
+    externalMcpToolPrefixes,
     turn,
     emit,
     finishApprovalStep: approvalId => {
@@ -329,6 +332,36 @@ async function runTurn(start: StartMessage, turn: BridgeTurn): Promise<void> {
       // `compact_boundary` system message does not. Latch it for the unified
       // `compaction` event; return an empty output so compaction proceeds.
       hooks: {
+        PreToolUse: [
+          {
+            hooks: [
+              async (input: { tool_name?: unknown }) => {
+                if ((start.permissionMode ?? 'allow-all') === 'allow-all') {
+                  return {};
+                }
+                const toolName = input?.tool_name;
+                if (
+                  typeof toolName !== 'string' ||
+                  NATIVE_TOOL_KINDS[toolName] != null ||
+                  toolName.startsWith('mcp__harness-tools__') ||
+                  externalMcpToolPrefixes.some(prefix =>
+                    toolName.startsWith(prefix),
+                  )
+                ) {
+                  return {};
+                }
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'ask',
+                    permissionDecisionReason:
+                      'Unknown Claude native tool requires host approval.',
+                  },
+                };
+              },
+            ],
+          },
+        ],
         PostCompact: [
           {
             hooks: [
