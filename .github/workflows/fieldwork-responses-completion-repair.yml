@@ -88,8 +88,8 @@ jobs:
           PY
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build workspace packages
-        run: pnpm build:packages
+      - name: Build affected packages and dependencies
+        run: pnpm turbo build --filter=@ai-sdk/openai... --filter=@ai-sdk/open-responses...
       - name: Run Open Responses regression
         run: pnpm -C packages/open-responses exec vitest --config vitest.node.config.js --run src/responses/open-responses-completion-status.test.ts
       - name: Run native OpenAI regression
