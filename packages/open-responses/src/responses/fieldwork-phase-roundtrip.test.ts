@@ -1,4 +1,5 @@
 import type { LanguageModelV4Prompt } from '@ai-sdk/provider';
+import { mockId } from '@ai-sdk/provider-utils/test';
 import { createTestServer } from '@ai-sdk/test-server/with-vitest';
 import { describe, expect, it } from 'vitest';
 import { OpenResponsesLanguageModel } from './open-responses-language-model';
@@ -15,6 +16,7 @@ function createModel() {
     providerOptionsName: 'fieldwork',
     url: URL,
     headers: () => ({}),
+    generateId: mockId(),
   });
 }
 
@@ -81,13 +83,26 @@ async function roundTrip(phase?: 'commentary' | 'final_answer') {
   ];
 
   const first = await model.doGenerate({ prompt: initialPrompt });
+  const assistantContent = first.content.flatMap(part =>
+    part.type === 'text'
+      ? [
+          {
+            type: 'text' as const,
+            text: part.text,
+            ...(part.providerMetadata != null
+              ? { providerOptions: part.providerMetadata }
+              : {}),
+          },
+        ]
+      : [],
+  );
 
   server.urls[URL].response = { type: 'json-value', body: finalResponse };
 
   await model.doGenerate({
     prompt: [
       ...initialPrompt,
-      { role: 'assistant', content: first.content },
+      { role: 'assistant', content: assistantContent },
       { role: 'user', content: [{ type: 'text', text: 'Continue' }] },
     ],
   });
