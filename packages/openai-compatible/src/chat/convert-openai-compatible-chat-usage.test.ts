@@ -32,6 +32,41 @@ describe('convertOpenAICompatibleChatUsage', () => {
     });
   });
 
+  it('uses top-level reasoning tokens when nested details are absent', () => {
+    const usage = {
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      total_tokens: 30,
+      reasoning_tokens: 8,
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage)).toEqual({
+      inputTokens: {
+        total: 10,
+        noCache: 10,
+        cacheRead: 0,
+        cacheWrite: undefined,
+      },
+      outputTokens: { total: 20, text: 12, reasoning: 8 },
+      raw: usage,
+    });
+  });
+
+  it('prefers nested reasoning tokens when both fields are present', () => {
+    const usage = {
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      reasoning_tokens: 8,
+      completion_tokens_details: { reasoning_tokens: 5 },
+    };
+
+    expect(convertOpenAICompatibleChatUsage(usage).outputTokens).toEqual({
+      total: 20,
+      text: 15,
+      reasoning: 5,
+    });
+  });
+
   it('clamps text tokens at 0 when reasoning exceeds completion', () => {
     // Provider-inconsistent usage (Baseten Kimi-K3, finish_reason 'length'):
     // completion_tokens undercounts the actual generation, so
