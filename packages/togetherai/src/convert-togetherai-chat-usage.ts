@@ -1,5 +1,5 @@
+import { convertOpenAICompatibleChatUsage } from '@ai-sdk/openai-compatible/internal';
 import type { LanguageModelV4Usage } from '@ai-sdk/provider';
-import { createNullLanguageModelUsage } from '@ai-sdk/provider-utils';
 
 export function convertTogetherAIChatUsage(
   usage:
@@ -18,29 +18,22 @@ export function convertTogetherAIChatUsage(
     | undefined
     | null,
 ): LanguageModelV4Usage {
+  const converted = convertOpenAICompatibleChatUsage(usage);
+
   if (usage == null) {
-    return createNullLanguageModelUsage();
+    return converted;
   }
 
-  const promptTokens = usage.prompt_tokens ?? 0;
-  const completionTokens = usage.completion_tokens ?? 0;
+  const promptTokens = converted.inputTokens.total ?? 0;
   const cacheReadTokens =
     usage.prompt_tokens_details?.cached_tokens || usage.cached_tokens || 0;
-  const reasoningTokens =
-    usage.completion_tokens_details?.reasoning_tokens ?? 0;
 
   return {
+    ...converted,
     inputTokens: {
-      total: promptTokens,
+      ...converted.inputTokens,
       noCache: promptTokens - cacheReadTokens,
       cacheRead: cacheReadTokens,
-      cacheWrite: undefined,
     },
-    outputTokens: {
-      total: completionTokens,
-      text: Math.max(0, completionTokens - reasoningTokens),
-      reasoning: reasoningTokens,
-    },
-    raw: usage,
   };
 }
