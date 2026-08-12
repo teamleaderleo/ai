@@ -27,6 +27,8 @@ type StatusCase =
   | { kind: 'localShell'; status: LocalShellStatus }
   | { kind: 'toolSearch'; status: ToolSearchStatus };
 
+type ProviderExecutedCase = 'shell' | 'toolSearch';
+
 function outputItem(testCase: StatusCase) {
   switch (testCase.kind) {
     case 'function':
@@ -156,6 +158,53 @@ function toolsFor(
   }
 }
 
+function providerExecutedItem(testCase: ProviderExecutedCase) {
+  switch (testCase) {
+    case 'shell':
+      return {
+        id: 'sh_provider',
+        type: 'shell_call' as const,
+        call_id: 'call_provider',
+        status: 'incomplete' as const,
+        action: { commands: ['echo provider-progress'] },
+      };
+    case 'toolSearch':
+      return {
+        id: 'ts_provider',
+        type: 'tool_search_call' as const,
+        execution: 'server' as const,
+        call_id: 'call_provider',
+        status: 'incomplete' as const,
+        arguments: { goal: 'find a hosted tool' },
+      };
+  }
+}
+
+function providerExecutedTools(
+  testCase: ProviderExecutedCase,
+): LanguageModelV4CallOptions['tools'] {
+  switch (testCase) {
+    case 'shell':
+      return [
+        {
+          type: 'provider',
+          id: 'openai.shell',
+          name: 'shell',
+          args: { environment: { type: 'containerAuto' } },
+        },
+      ];
+    case 'toolSearch':
+      return [
+        {
+          type: 'provider',
+          id: 'openai.tool_search',
+          name: 'toolSearch',
+          args: { execution: 'server' },
+        },
+      ];
+  }
+}
+
 function isCompleted(testCase: StatusCase) {
   return testCase.status === 'completed';
 }
@@ -171,6 +220,31 @@ function responseBody(testCase: StatusCase) {
     incomplete_details: completed ? null : { reason: 'max_output_tokens' },
     model: 'gpt-4o-2024-07-18',
     output: [outputItem(testCase)],
+    parallel_tool_calls: true,
+    store: true,
+    tool_choice: 'auto',
+    tools: [],
+    usage: {
+      input_tokens: 1,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 1,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 2,
+    },
+    metadata: {},
+  };
+}
+
+function incompleteResponseBody(id: string, item: object) {
+  return {
+    id,
+    object: 'response',
+    created_at: 1741257730,
+    status: 'incomplete',
+    error: null,
+    incomplete_details: { reason: 'max_output_tokens' },
+    model: 'gpt-4o-2024-07-18',
+    output: [item],
     parallel_tool_calls: true,
     store: true,
     tool_choice: 'auto',
@@ -306,6 +380,78 @@ describe('OpenAIResponsesLanguageModel completion status', () => {
           finish?.type === 'finish' ? finish.finishReason.unified : undefined,
         ).toBe('length');
       }
+    });
+  }
+
+  for (const testCase of ['shell', 'toolSearch'] as const) {
+    it(`doGenerate preserves incomplete provider-executed ${testCase}`, async () => {
+      const item = providerExecutedItem(testCase);
+      server.urls[URL].response = {
+        type: 'json-value',
+        body: incompleteResponseBody(`resp_provider_${testCase}`, item),
+      };
+
+      const result = await createModel().doGenerate({
+        prompt: TEST_PROMPT,
+        tools: providerExecutedTools(testCase),
+      });
+      const toolCalls = result.content.filter(part => part.type === 'tool-call');
+
+      expect(toolCalls).toHaveLength(1);
+      expect(toolCalls[0]).toMatchObject({ providerExecuted: true });
+    });
+
+    it(`doStream preserves incomplete provider-executed ${testCase}`, async () => {
+      const item = providerExecutedItem(testCase);
+      server.urls[URL].response = {
+        type: 'stream-chunks',
+        chunks: [
+          `data: ${JSON.stringify({
+            type: 'response.created',
+            response: {
+              id: 'resp_provider_stream',
+              created_at: 1741257730,
+              model: 'gpt-4o-2024-07-18',
+              service_tier: null,
+            },
+          })}\n\n`,
+          `data: ${JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item,
+          })}\n\n`,
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            output_index: 0,
+            item,
+          })}\n\n`,
+          `data: ${JSON.stringify({
+            type: 'response.incomplete',
+            response: {
+              incomplete_details: { reason: 'max_output_tokens' },
+              usage: {
+                input_tokens: 1,
+                input_tokens_details: { cached_tokens: 0 },
+                output_tokens: 1,
+                output_tokens_details: { reasoning_tokens: 0 },
+              },
+              reasoning: null,
+              service_tier: null,
+            },
+          })}\n\n`,
+          'data: [DONE]\n\n',
+        ],
+      };
+
+      const result = await createModel().doStream({
+        prompt: TEST_PROMPT,
+        tools: providerExecutedTools(testCase),
+      });
+      const parts = await convertReadableStreamToArray(result.stream);
+      const toolCalls = parts.filter(part => part.type === 'tool-call');
+
+      expect(toolCalls).toHaveLength(1);
+      expect(toolCalls[0]).toMatchObject({ providerExecuted: true });
     });
   }
 });
