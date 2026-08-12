@@ -16,20 +16,23 @@ function createCapturingFetch(onUrl: (url: string) => void) {
 
 describe('Fieldwork: Google Vertex Chirp regional routing', () => {
   for (const location of ['eu', 'us'] as const) {
-    it(`routes Chirp through the global Cloud TTS endpoint even when provider location is ${location}`, async () => {
-      let requestUrl: string | undefined;
-      const provider = createGoogleVertex({
-        project: 'fieldwork-project',
-        location,
-        fetch: createCapturingFetch(url => {
-          requestUrl = url;
-        }),
-      });
+    it(
+      `routes Chirp through the global Cloud TTS endpoint even when provider location is ${location}`,
+      async () => {
+        let requestUrl: string | undefined;
+        const provider = createGoogleVertex({
+          project: 'fieldwork-project',
+          location,
+          fetch: createCapturingFetch(url => {
+            requestUrl = url;
+          }),
+        });
 
-      await provider.speech('chirp-3-hd').doGenerate({ text: 'hello' });
+        await provider.speech('chirp-3-hd').doGenerate({ text: 'hello' });
 
-      expect(requestUrl).toBe(GLOBAL_TTS_URL);
-    });
+        expect(requestUrl).toBe(GLOBAL_TTS_URL);
+      },
+    );
   }
 
   it('uses the global Cloud TTS endpoint for global location', async () => {
