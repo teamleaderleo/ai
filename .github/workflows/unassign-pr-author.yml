@@ -1,49 +1,38 @@
-name: Keep fork PR authors unassigned
+name: Disable fork PR author assignment
 
 on:
   pull_request_target:
-    types: [assigned]
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/unassign-pr-author.yml
+    types: [opened]
 
 permissions:
   contents: read
 
 jobs:
-  unassign-author:
+  disable-and-clean:
     if: >-
-      github.event_name == 'pull_request_target' &&
       github.repository == 'teamleaderleo/ai' &&
-      github.event.assignee.login == github.event.pull_request.user.login
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'maintenance/disable-pr-author-assignment'
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       pull-requests: write
     steps:
-      - name: Remove PR author assignment
-        run: gh pr edit "$PULL_REQUEST_URL" --remove-assignee "$AUTHOR_LOGIN"
+      - name: Disable inherited author-assignment workflow
+        run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/323294038/disable"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PULL_REQUEST_URL: ${{ github.event.pull_request.html_url }}
-          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
 
-  cleanup-existing:
-    if: >-
-      github.event_name == 'push' &&
-      github.repository == 'teamleaderleo/ai'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Remove authors from existing open PR assignments
+      - name: Remove PR authors from existing assignments
         shell: bash
         run: |
           set -euo pipefail
           gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
             --jq '.[] | select(. as $pr | [$pr.assignees[].login] | index($pr.user.login)) | [.number, .user.login] | @tsv' \
             | while IFS=$'\t' read -r number author; do
-                gh pr edit "$number" --remove-assignee "$author"
+                gh api --method DELETE \
+                  "repos/$GITHUB_REPOSITORY/issues/$number/assignees" \
+                  -f "assignees[]=$author" >/dev/null
               done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
