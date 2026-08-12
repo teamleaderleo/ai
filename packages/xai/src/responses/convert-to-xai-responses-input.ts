@@ -17,16 +17,61 @@ import type {
   XaiResponsesUserMessageContentPart,
 } from './xai-responses-api';
 
+type XaiResponsesImageGenerationCall = {
+  type: 'image_generation_call';
+  id: string;
+  result: string;
+  status: 'completed';
+};
+
+type XaiResponsesInputWithImageGeneration = Array<
+  XaiResponsesInput[number] | XaiResponsesImageGenerationCall
+>;
+
+function getImageGenerationResult({
+  message,
+  toolCallId,
+  toolName,
+}: {
+  message: Extract<LanguageModelV4Message, { role: 'assistant' }>;
+  toolCallId: string;
+  toolName: string;
+}): string | undefined {
+  const resultPart = message.content.find(
+    part =>
+      part.type === 'tool-result' &&
+      part.toolCallId === toolCallId &&
+      part.toolName === toolName,
+  );
+
+  if (resultPart?.type !== 'tool-result' || resultPart.output.type !== 'json') {
+    return undefined;
+  }
+
+  const value = resultPart.output.value;
+  if (
+    typeof value !== 'object' ||
+    value == null ||
+    Array.isArray(value) ||
+    !('result' in value) ||
+    typeof value.result !== 'string'
+  ) {
+    return undefined;
+  }
+
+  return value.result;
+}
+
 export async function convertToXaiResponsesInput({
   prompt,
 }: {
   prompt: LanguageModelV4Message[];
   store?: boolean;
 }): Promise<{
-  input: XaiResponsesInput;
+  input: XaiResponsesInputWithImageGeneration;
   inputWarnings: SharedV4Warning[];
 }> {
-  const input: XaiResponsesInput = [];
+  const input: XaiResponsesInputWithImageGeneration = [];
   const inputWarnings: SharedV4Warning[] = [];
 
   for (const message of prompt) {
@@ -146,6 +191,21 @@ export async function convertToXaiResponsesInput({
 
             case 'tool-call': {
               if (part.providerExecuted) {
+                const result = getImageGenerationResult({
+                  message,
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                });
+
+                if (result != null) {
+                  input.push({
+                    type: 'image_generation_call',
+                    id: part.toolCallId,
+                    result,
+                    status: 'completed',
+                  });
+                }
+
                 break;
               }
 
