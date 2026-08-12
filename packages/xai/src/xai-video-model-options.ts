@@ -40,25 +40,39 @@ interface XaiVideoExtendModeOptions extends XaiVideoSharedOptions {
   videoUrl: string;
 }
 
-interface XaiVideoReferenceToVideoOptions
-  extends XaiVideoSharedOptions, XaiVideoUserOptions {
-  /**
-   * Select reference-to-video mode explicitly for best autocomplete and narrowing.
-   */
-  mode: 'reference-to-video';
-  /** Reference image URLs (1-7) for R2V generation. */
-  referenceImageUrls: string[];
-  /**
-   * Preset voice ids (up to 3) that give the subject a voice.
-   */
-  referenceVoiceIds?: string[];
-}
+type XaiVideoReferenceInputOptions =
+  | {
+      /** Reference image URLs for R2V generation. */
+      referenceImageUrls: string[];
+      /** Private xAI Files API image ids for R2V generation. */
+      referenceImageFileIds?: string[];
+    }
+  | {
+      /** Reference image URLs for R2V generation. */
+      referenceImageUrls?: string[];
+      /** Private xAI Files API image ids for R2V generation. */
+      referenceImageFileIds: string[];
+    };
+
+type XaiVideoReferenceToVideoOptions = XaiVideoSharedOptions &
+  XaiVideoUserOptions &
+  XaiVideoReferenceInputOptions & {
+    /**
+     * Select reference-to-video mode explicitly for best autocomplete and narrowing.
+     */
+    mode: 'reference-to-video';
+    /**
+     * Preset voice ids (up to 3) that give the subject a voice.
+     */
+    referenceVoiceIds?: string[];
+  };
 
 interface XaiVideoGenerationOptions
   extends XaiVideoSharedOptions, XaiVideoUserOptions {
   mode?: undefined;
   videoUrl?: undefined;
   referenceImageUrls?: undefined;
+  referenceImageFileIds?: undefined;
 }
 
 interface XaiLegacyEditVideoOptions
@@ -69,31 +83,33 @@ interface XaiLegacyEditVideoOptions
    */
   mode?: undefined;
   videoUrl: string;
+  referenceImageFileIds?: undefined;
 }
 
-interface XaiLegacyReferenceToVideoOptions
-  extends XaiVideoSharedOptions, XaiVideoUserOptions {
-  /**
-   * Legacy backward-compatible shape: omitting `mode` while providing
-   * `referenceImageUrls` behaves like reference-to-video.
-   */
-  mode?: undefined;
-  referenceImageUrls: string[];
-  /**
-   * Preset voice ids (up to 3) that give the subject a voice.
-   */
-  referenceVoiceIds?: string[];
-}
+type XaiLegacyReferenceToVideoOptions = XaiVideoSharedOptions &
+  XaiVideoUserOptions &
+  XaiVideoReferenceInputOptions & {
+    /**
+     * Legacy backward-compatible shape: omitting `mode` while providing
+     * reference images behaves like reference-to-video.
+     */
+    mode?: undefined;
+    videoUrl?: undefined;
+    /**
+     * Preset voice ids (up to 3) that give the subject a voice.
+     */
+    referenceVoiceIds?: string[];
+  };
 
 /**
  * Provider options for xAI video generation.
  *
  * Use the `mode` option to select the operation:
  *
- * - `'edit-video'`         + `videoUrl`           -- video editing   (`POST /v1/videos/edits`)
- * - `'extend-video'`       + `videoUrl`           -- video extension (`POST /v1/videos/extensions`)
- * - `'reference-to-video'` + `referenceImageUrls` -- R2V generation  (`POST /v1/videos/generations`)
- * - no `mode`                                     -- standard generation from text prompts or image input
+ * - `'edit-video'`         + `videoUrl`                         -- video editing   (`POST /v1/videos/edits`)
+ * - `'extend-video'`       + `videoUrl`                         -- video extension (`POST /v1/videos/extensions`)
+ * - `'reference-to-video'` + reference image URLs or file IDs -- R2V generation  (`POST /v1/videos/generations`)
+ * - no `mode`                                                  -- standard generation from text prompts or image input
  *
  * Runtime remains backward compatible with legacy auto-detected provider
  * options, but the public TypeScript type is intentionally explicit so editors
@@ -114,14 +130,29 @@ const baseFields = {
   resolution: resolutionSchema.nullish(),
 };
 
-const runtimeSchema = z.looseObject({
-  mode: modeSchema.optional(),
-  videoUrl: nonEmptyStringSchema.optional(),
-  referenceImageUrls: z.array(nonEmptyStringSchema).min(1).max(7).optional(),
-  referenceVoiceIds: z.array(nonEmptyStringSchema).max(3).optional(),
-  user: z.string().optional(),
-  ...baseFields,
-});
+const runtimeSchema = z
+  .looseObject({
+    mode: modeSchema.optional(),
+    videoUrl: nonEmptyStringSchema.optional(),
+    referenceImageUrls: z.array(nonEmptyStringSchema).max(7).optional(),
+    referenceImageFileIds: z.array(nonEmptyStringSchema).max(7).optional(),
+    referenceVoiceIds: z.array(nonEmptyStringSchema).max(3).optional(),
+    user: z.string().optional(),
+    ...baseFields,
+  })
+  .superRefine((value, ctx) => {
+    const referenceCount =
+      (value.referenceImageFileIds?.length ?? 0) +
+      (value.referenceImageUrls?.length ?? 0);
+
+    if (referenceCount > 7) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['referenceImageFileIds'],
+        message: 'xAI reference-to-video supports at most 7 reference images.',
+      });
+    }
+  });
 
 export type XaiParsedVideoModelOptions = z.infer<typeof runtimeSchema>;
 
