@@ -1,0 +1,98 @@
+name: Fieldwork Baseten reasoning usage repair
+
+on:
+  pull_request:
+    branches:
+      - candidate/baseten-reasoning-usage-8e90
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/baseten-reasoning-usage-8e90
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply managed Model APIs usage repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=8e9028317de6a72973971356283271aff44bba74
+          test "$(git rev-parse HEAD)" = "$BASE"
+          python <<'PY'
+          from pathlib import Path
+
+          provider = Path('packages/baseten/src/baseten-provider.ts')
+          text = provider.read_text()
+
+          import_block = """import {\n  OpenAICompatibleChatLanguageModel,\n  OpenAICompatibleEmbeddingModel,\n  type ProviderErrorStructure,\n} from '@ai-sdk/openai-compatible';\n"""
+          replacement = import_block + """import {\n  convertOpenAICompatibleChatUsage,\n  type OpenAICompatibleChatConfig,\n} from '@ai-sdk/openai-compatible/internal';\n"""
+          assert text.count(import_block) == 1
+          text = text.replace(import_block, replacement, 1)
+
+          marker = """const basetenErrorStructure: ProviderErrorStructure<BasetenErrorData> = {\n  errorSchema: basetenErrorSchema,\n  errorToMessage: data =>\n    typeof data.error === 'string' ? data.error : data.error.message,\n};\n"""
+          converter = marker + """\n// Baseten Model APIs document reasoning tokens as part of completion_tokens.\n// If an upstream response contradicts that contract, preserve the literal\n// counters in raw usage but do not publish a reasoning detail larger than its\n// normalized output aggregate. Dedicated deployments are intentionally left on\n// generic OpenAI-compatible conversion because their server semantics are not\n// owned by the Model APIs contract.\nconst convertBasetenModelApiChatUsage: NonNullable<\n  OpenAICompatibleChatConfig['convertUsage']\n> = usage => {\n  const converted = convertOpenAICompatibleChatUsage(usage);\n  const { total, reasoning } = converted.outputTokens;\n\n  if (\n    total !== undefined &&\n    reasoning !== undefined &&\n    reasoning > total\n  ) {\n    return {\n      ...converted,\n      outputTokens: {\n        ...converted.outputTokens,\n        reasoning: total,\n        text: 0,\n      },\n    };\n  }\n\n  return converted;\n};\n"""
+          assert text.count(marker) == 1
+          text = text.replace(marker, converter, 1)
+
+          default_config = """    return new OpenAICompatibleChatLanguageModel(modelId ?? 'chat', {\n      ...getCommonModelConfig('chat'),\n      errorStructure: basetenErrorStructure,\n      includeUsage: true,\n    });\n"""
+          default_replacement = """    return new OpenAICompatibleChatLanguageModel(modelId ?? 'chat', {\n      ...getCommonModelConfig('chat'),\n      errorStructure: basetenErrorStructure,\n      includeUsage: true,\n      convertUsage: convertBasetenModelApiChatUsage,\n    });\n"""
+          assert text.count(default_config) == 1
+          text = text.replace(default_config, default_replacement, 1)
+          provider.write_text(text)
+
+          test = Path('packages/baseten/src/baseten-provider.unit.test.ts')
+          t = test.read_text()
+          anchor = """    describe('includeUsage', () => {\n      it('should be set for the default Model APIs path', () => {\n        createBaseten().chatModel('deepseek-ai/DeepSeek-V3-0324');\n\n        const config = OpenAICompatibleChatLanguageModelMock.mock.calls[0][1];\n        expect(config.includeUsage).toBe(true);\n      });\n\n      it('should be set for a dedicated /sync/v1 deployment', () => {\n        createBaseten({\n          modelURL:\n            'https://model-123.api.baseten.co/environments/production/sync/v1',\n        }).chatModel();\n\n        const config = OpenAICompatibleChatLanguageModelMock.mock.calls[0][1];\n        expect(config.includeUsage).toBe(true);\n      });\n    });\n"""
+          addition = anchor + """\n    describe('usage conversion', () => {\n      it('keeps managed Model APIs reasoning within completion aggregate', () => {\n        createBaseten().chatModel('moonshotai/Kimi-K3');\n        const config = OpenAICompatibleChatLanguageModelMock.mock.calls[0][1];\n        const usage = {\n          prompt_tokens: 951,\n          completion_tokens: 6000,\n          total_tokens: 6952,\n          prompt_tokens_details: { cached_tokens: 60 },\n          completion_tokens_details: { reasoning_tokens: 6001 },\n        };\n\n        expect(config.convertUsage(usage)).toEqual({\n          inputTokens: {\n            total: 951,\n            noCache: 891,\n            cacheRead: 60,\n            cacheWrite: undefined,\n          },\n          outputTokens: { total: 6000, text: 0, reasoning: 6000 },\n          raw: usage,\n        });\n      });\n\n      it('leaves dedicated /sync/v1 deployments on generic conversion', () => {\n        createBaseten({\n          modelURL:\n            'https://model-123.api.baseten.co/environments/production/sync/v1',\n        }).chatModel('custom-model');\n\n        const config = OpenAICompatibleChatLanguageModelMock.mock.calls[0][1];\n        expect(config.convertUsage).toBeUndefined();\n      });\n    });\n"""
+          assert t.count(anchor) == 1
+          test.write_text(t.replace(anchor, addition, 1))
+
+          Path('.changeset/baseten-reasoning-usage.md').write_text("""---\n'@ai-sdk/baseten': patch\n---\n\nKeep managed Baseten Model APIs reasoning usage within the documented completion-token aggregate when an upstream response reports contradictory counters.\n""")
+          PY
+          git config user.name 'Fieldwork Repair'
+          git config user.email 'fieldwork-repair@users.noreply.github.com'
+          git add .changeset/baseten-reasoning-usage.md \
+            packages/baseten/src/baseten-provider.ts \
+            packages/baseten/src/baseten-provider.unit.test.ts
+          git commit -m 'fix(baseten): preserve reasoning usage aggregate semantics'
+          test "$(git rev-parse HEAD^)" = "$BASE"
+      - name: Verify exact source fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=8e9028317de6a72973971356283271aff44bba74
+          git diff --check "$BASE"...HEAD
+          git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+          printf '%s\n' \
+            .changeset/baseten-reasoning-usage.md \
+            packages/baseten/src/baseten-provider.ts \
+            packages/baseten/src/baseten-provider.unit.test.ts \
+            | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+      - run: pnpm install --frozen-lockfile
+      - name: Repository code consistency
+        run: pnpm konsistent
+      - name: Baseten type check
+        run: pnpm -C packages/baseten type-check
+      - name: Baseten Node tests
+        run: pnpm -C packages/baseten test:node
+      - name: Baseten Edge tests
+        run: pnpm -C packages/baseten test:edge
+      - name: OpenAI-compatible generic xAI compatibility control
+        run: pnpm -C packages/openai-compatible exec vitest --config vitest.node.config.js --run src/chat/convert-openai-compatible-chat-usage.test.ts src/chat/openai-compatible-chat-language-model.test.ts
+      - name: Build Baseten package
+        run: pnpm -C packages/baseten build
+      - name: Publish repaired candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/candidate/baseten-reasoning-usage-8e90
