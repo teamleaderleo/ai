@@ -33,7 +33,7 @@ describe('convertTogetherAIChatUsage', () => {
     });
   });
 
-  it('prefers nested cached-token detail when both locations are present', () => {
+  it('uses a nonzero nested cache count before the flat location', () => {
     const usage = {
       prompt_tokens: 10,
       completion_tokens: 5,
@@ -45,6 +45,22 @@ describe('convertTogetherAIChatUsage', () => {
       total: 10,
       noCache: 7,
       cacheRead: 3,
+      cacheWrite: undefined,
+    });
+  });
+
+  it('falls back to flat cache count when nested count is zero', () => {
+    const usage = {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      cached_tokens: 4,
+      prompt_tokens_details: { cached_tokens: 0 },
+    };
+
+    expect(convertTogetherAIChatUsage(usage).inputTokens).toEqual({
+      total: 10,
+      noCache: 6,
+      cacheRead: 4,
       cacheWrite: undefined,
     });
   });
