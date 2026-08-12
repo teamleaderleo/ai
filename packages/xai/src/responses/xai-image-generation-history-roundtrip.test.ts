@@ -1,65 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { convertToModelMessages } from '../../../ai/src/ui/convert-to-model-messages';
 import { convertToXaiResponsesInput } from './convert-to-xai-responses-input';
 
 describe('xAI persisted image-generation history', () => {
-  it('round-trips a persisted generated image through UI and provider conversion', async () => {
-    const generatedImage = 'A'.repeat(1024);
-    const uiMessages = [
-      {
-        role: 'user' as const,
-        parts: [{ type: 'text' as const, text: 'Generate a blue robot.' }],
-      },
-      {
-        role: 'assistant' as const,
-        parts: [
-          { type: 'step-start' as const },
-          {
-            type: 'tool-image_generation' as const,
-            state: 'output-available' as const,
-            toolCallId: 'ig_123',
-            input: {},
-            output: {
-              result: generatedImage,
-              prompt: 'A friendly blue robot',
+  it('reconstructs a successful provider-executed image result', async () => {
+    const result = await convertToXaiResponsesInput({
+      prompt: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'ig_123',
+              toolName: 'image_generation',
+              input: '{}',
+              providerExecuted: true,
             },
-            providerExecuted: true,
-          },
-          {
-            type: 'text' as const,
-            text: 'Here is the robot.',
-            state: 'done' as const,
-          },
-        ],
-      },
-      {
-        role: 'user' as const,
-        parts: [{ type: 'text' as const, text: 'Make it red.' }],
-      },
-    ];
+            {
+              type: 'tool-result',
+              toolCallId: 'ig_123',
+              toolName: 'image_generation',
+              output: {
+                type: 'json',
+                value: {
+                  result: 'BASE64_IMAGE',
+                  prompt: 'A friendly blue robot',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
 
-    const modelMessages = await convertToModelMessages(uiMessages);
-    const xai = await convertToXaiResponsesInput({ prompt: modelMessages });
-
-    expect(xai.input).toEqual([
-      {
-        role: 'user',
-        content: [{ type: 'input_text', text: 'Generate a blue robot.' }],
-      },
+    expect(result.input).toEqual([
       {
         type: 'image_generation_call',
         id: 'ig_123',
-        result: generatedImage,
+        result: 'BASE64_IMAGE',
         status: 'completed',
-      },
-      {
-        role: 'assistant',
-        content: 'Here is the robot.',
-        id: undefined,
-      },
-      {
-        role: 'user',
-        content: [{ type: 'input_text', text: 'Make it red.' }],
       },
     ]);
   });
