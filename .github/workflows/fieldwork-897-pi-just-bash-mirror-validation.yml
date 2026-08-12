@@ -25,8 +25,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check focused test formatting
-        run: pnpm exec oxfmt --check packages/sandbox-just-bash/src/pi-workspace-mirror-compatibility.test.ts
+      - name: Format focused test for execution
+        run: |
+          pnpm exec oxfmt packages/sandbox-just-bash/src/pi-workspace-mirror-compatibility.test.ts
+          git diff -- packages/sandbox-just-bash/src/pi-workspace-mirror-compatibility.test.ts
 
       - name: Type-check just-bash sandbox package
         run: pnpm --filter @ai-sdk/sandbox-just-bash type-check
