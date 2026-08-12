@@ -2,14 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { MockVideoModelV4 } from '../test/mock-video-model-v4';
 import { experimental_generateVideo } from './generate-video';
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(resolvePromise => {
     resolve = resolvePromise;
-    reject = rejectPromise;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
 const startResult = (operation: string) => ({
@@ -41,10 +39,10 @@ const completedStatus = () => ({
 
 describe('Fieldwork #868: generateVideo fanout failure ownership', () => {
   it('lets a sibling status flow continue after the aggregate promise rejects', async () => {
-    const bothStatusesStarted = deferred<void>();
-    const failFirst = deferred<void>();
-    const releaseSibling = deferred<void>();
-    const siblingFinished = deferred<void>();
+    const bothStatusesStarted = deferred();
+    const failFirst = deferred();
+    const releaseSibling = deferred();
+    const siblingFinished = deferred();
     let startCount = 0;
     let statusCount = 0;
     let siblingCompleted = false;
