@@ -12,9 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-    # Only assign pull requests by team members, ignore pull requests from forks
-    # And only assign if pull request was created by a user, ignore bots
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.type == 'User'
+    # Only run this auto-assignment workflow in the upstream Vercel AI SDK repository.
+    # Forks keep the workflow file for easier upstream syncing without auto-assigning PR authors.
+    if: github.repository == 'vercel/ai' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.type == 'User'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Assign pull request to author
