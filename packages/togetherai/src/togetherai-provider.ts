@@ -16,6 +16,7 @@ import {
   withUserAgentSuffix,
   type FetchFunction,
 } from '@ai-sdk/provider-utils';
+import { convertTogetherAIChatUsage } from './convert-togetherai-chat-usage';
 import { TogetherAIRerankingModel } from './reranking/togetherai-reranking-model';
 import type { TogetherAIRerankingModelId } from './reranking/togetherai-reranking-model-options';
 import type { TogetherAIChatModelId } from './togetherai-chat-options';
@@ -151,6 +152,7 @@ export function createTogetherAI(
     return new OpenAICompatibleChatLanguageModel(modelId, {
       ...getCommonModelConfig('chat'),
       includeUsage: true,
+      convertUsage: convertTogetherAIChatUsage,
     });
   };
 
