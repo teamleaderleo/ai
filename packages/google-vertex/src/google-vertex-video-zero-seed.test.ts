@@ -6,7 +6,8 @@ const prompt = 'A rocket launching into space';
 function createModel(onRequest: (body: unknown) => void) {
   return new GoogleVertexVideoModel('veo-3.1-generate-preview', {
     provider: 'google-vertex.video',
-    baseURL: 'https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google',
+    baseURL:
+      'https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google',
     headers: { Authorization: 'Bearer test-token' },
     fetch: async (_url, init) => {
       if (init?.body != null) {
