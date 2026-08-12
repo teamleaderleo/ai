@@ -130,6 +130,13 @@ export function createEmitStreamEvent({
       streamStarted = true;
     }
 
+    // Messages emitted by a Task-tool subagent carry the parent tool-use id.
+    // They belong to the subagent stream and must not affect parent error,
+    // compaction, step, or partial-stream state.
+    if (msg.parent_tool_use_id != null) {
+      return;
+    }
+
     if (type === 'system' && msg.subtype === 'api_retry') {
       if (
         typeof msg.error_status === 'number' &&
@@ -181,13 +188,6 @@ export function createEmitStreamEvent({
             : {}),
         });
       }
-      return;
-    }
-
-    // Messages emitted by a Task-tool subagent carry the parent tool-use id.
-    // They belong to the subagent stream and must not affect the parent step,
-    // including partial stream events that arrive before assistant messages.
-    if (msg.parent_tool_use_id != null) {
       return;
     }
 
