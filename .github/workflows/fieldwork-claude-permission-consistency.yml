@@ -1,0 +1,63 @@
+name: Fieldwork Claude permission consistency repair
+
+on:
+  pull_request:
+    branches:
+      - candidate/claude-permission-kind-parity-8e90-consistency
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/claude-permission-kind-parity-8e90-consistency
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply bridge-boundary consistency repair
+        run: |
+          git mv packages/harness-claude-code/src/native-tool-kinds.ts packages/harness-claude-code/src/bridge/native-tool-kinds.ts
+          git mv packages/harness-claude-code/src/bridge/native-tool-kind-parity.test.ts packages/harness-claude-code/src/native-tool-kind-parity.test.ts
+          sed -i "s#from '../native-tool-kinds';#from './native-tool-kinds';#" packages/harness-claude-code/src/bridge/index.ts
+          sed -i "s#from '../claude-code-harness';#from './claude-code-harness';#" packages/harness-claude-code/src/native-tool-kind-parity.test.ts
+          sed -i "s#from '../native-tool-kinds';#from './bridge/native-tool-kinds';#" packages/harness-claude-code/src/native-tool-kind-parity.test.ts
+          sed -i "s#await import('./index');#await import('./bridge/index');#" packages/harness-claude-code/src/native-tool-kind-parity.test.ts
+          git diff --check
+          git config user.name "Fieldwork Repair"
+          git config user.email "fieldwork-repair@users.noreply.github.com"
+          git add packages/harness-claude-code/src
+          git commit -m "Keep Claude permission parity within bridge import boundaries"
+      - name: Verify exact current-base source fence
+        run: |
+          BASE=8e9028317de6a72973971356283271aff44bba74
+          cat > /tmp/expected <<'EOF'
+          .changeset/claude-permission-kind-parity.md
+          packages/harness-claude-code/src/bridge/index.ts
+          packages/harness-claude-code/src/bridge/native-tool-kinds.ts
+          packages/harness-claude-code/src/claude-code-harness.ts
+          packages/harness-claude-code/src/native-tool-kind-parity.test.ts
+          EOF
+          sort -o /tmp/expected /tmp/expected
+          git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+          diff -u /tmp/expected /tmp/actual
+          git diff --check "$BASE"...HEAD
+      - run: pnpm install --frozen-lockfile
+      - name: Repository code consistency
+        run: pnpm konsistent
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Build host and sandbox bridge entries
+        run: pnpm -C packages/harness-claude-code build
+      - name: Focused exhaustive permission parity regression
+        run: pnpm -C packages/harness-claude-code exec vitest --config vitest.node.config.js --run src/native-tool-kind-parity.test.ts
+      - name: Full Node package tests
+        run: pnpm -C packages/harness-claude-code test:node
+      - name: Publish repaired candidate head
+        run: git push origin HEAD:candidate/claude-permission-kind-parity-8e90-consistency
