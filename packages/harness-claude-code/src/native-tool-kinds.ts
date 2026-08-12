@@ -1,15 +1,6 @@
 export type ClaudeCodeNativeToolKind = 'readonly' | 'edit' | 'bash';
 
-/**
- * Native Claude Code tool name -> harness permission kind.
- *
- * The sandbox bridge uses this table to build `permissions.ask` rules and to
- * decide whether an unresolved native tool call must enter the host approval
- * path. Keep aliases that can be emitted by supported Claude runtimes explicit.
- */
-export const CLAUDE_CODE_NATIVE_TOOL_KINDS: Readonly<
-  Record<string, ClaudeCodeNativeToolKind>
-> = {
+const CLAUDE_CODE_NATIVE_TOOL_KIND_ENTRIES = {
   Read: 'readonly',
   Glob: 'readonly',
   Grep: 'readonly',
@@ -55,7 +46,26 @@ export const CLAUDE_CODE_NATIVE_TOOL_KINDS: Readonly<
   ShareOnboardingGuide: 'edit',
   Workflow: 'edit',
 
+  // Agent can delegate arbitrary native work and accepts a bypassPermissions
+  // mode, so restricted allow-edits must keep it on the approval path.
+  Agent: 'bash',
   Bash: 'bash',
   Monitor: 'bash',
   PowerShell: 'bash',
-};
+} as const satisfies Readonly<Record<string, ClaudeCodeNativeToolKind>>;
+
+export type ClaudeCodeNativeToolName =
+  keyof typeof CLAUDE_CODE_NATIVE_TOOL_KIND_ENTRIES;
+
+/**
+ * Native Claude Code tool name -> harness permission kind.
+ *
+ * The sandbox bridge uses this table to build `permissions.ask` rules and to
+ * decide whether an unresolved native tool call must enter the host approval
+ * path. The literal source above keeps the known-name type closed while this
+ * exported read-only view still supports lookup of runtime-provided strings.
+ * Keep aliases that can be emitted by supported Claude runtimes explicit.
+ */
+export const CLAUDE_CODE_NATIVE_TOOL_KINDS: Readonly<
+  Record<string, ClaudeCodeNativeToolKind>
+> = CLAUDE_CODE_NATIVE_TOOL_KIND_ENTRIES;
