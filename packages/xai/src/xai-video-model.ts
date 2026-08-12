@@ -47,6 +47,7 @@ const RESOLUTION_MAP: Record<string, string> = {
 };
 
 type XaiVideoCallOptions = VideoModelV4CallOptions;
+type XaiReferenceImage = { url: string } | { file_id: string };
 
 function getFirstFrameImage(
   options: XaiVideoCallOptions,
@@ -89,14 +90,15 @@ function fileToXaiUrl(file: VideoModelV4File): string {
 }
 
 // Resolves the reference images for R2V generation. First-class
-// `inputReferences` win over the legacy `referenceImageUrls` provider option.
-// Non-image references (video or audio) are not supported for
-// reference-to-video and are skipped with a warning.
+// `inputReferences` win over xAI provider-specific references. Non-image
+// references (video or audio) are not supported for reference-to-video and
+// are skipped with a warning. Provider-side file IDs precede legacy URLs,
+// matching the xAI SDK's deterministic mixed-reference ordering.
 function resolveReferences(
   options: XaiVideoCallOptions,
   xaiOptions: XaiParsedVideoModelOptions | undefined,
   warnings: SharedV4Warning[],
-): Array<{ url: string }> | undefined {
+): XaiReferenceImage[] | undefined {
   if (options.inputReferences != null && options.inputReferences.length > 0) {
     const imageFiles: VideoModelV4File[] = [];
 
@@ -123,14 +125,12 @@ function resolveReferences(
       : undefined;
   }
 
-  if (
-    xaiOptions?.referenceImageUrls != null &&
-    xaiOptions.referenceImageUrls.length > 0
-  ) {
-    return xaiOptions.referenceImageUrls.map(url => ({ url }));
-  }
+  const providerReferences: XaiReferenceImage[] = [
+    ...(xaiOptions?.referenceImageFileIds ?? []).map(file_id => ({ file_id })),
+    ...(xaiOptions?.referenceImageUrls ?? []).map(url => ({ url })),
+  ];
 
-  return undefined;
+  return providerReferences.length > 0 ? providerReferences : undefined;
 }
 
 // True when at least one reference would survive as an image.
@@ -154,16 +154,18 @@ function resolveVideoMode(
   // only auto-select reference-to-video when no frame images are provided.
   const hasFrameImages =
     options.frameImages != null && options.frameImages.length > 0;
-  const hasLegacyReferenceUrls =
-    xaiOptions?.referenceImageUrls != null &&
-    xaiOptions.referenceImageUrls.length > 0;
+  const hasProviderReferences =
+    (xaiOptions?.referenceImageUrls != null &&
+      xaiOptions.referenceImageUrls.length > 0) ||
+    (xaiOptions?.referenceImageFileIds != null &&
+      xaiOptions.referenceImageFileIds.length > 0);
 
   // Reference-to-video needs at least one image reference. An audio-only (or
   // video-only) `inputReferences` array must not flip a text- or
   // image-to-video request into R2V.
   if (
     !hasFrameImages &&
-    (hasImageInputReference(options) || hasLegacyReferenceUrls)
+    (hasImageInputReference(options) || hasProviderReferences)
   ) {
     return 'reference-to-video';
   }
@@ -460,6 +462,7 @@ export class XaiVideoModel implements VideoModelV4 {
             'resolution',
             'videoUrl',
             'referenceImageUrls',
+            'referenceImageFileIds',
             'referenceVoiceIds',
             'user',
           ].includes(key)
