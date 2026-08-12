@@ -101,7 +101,7 @@ export class ReplicateVideoModel implements VideoModelV4 {
       input.fps = options.fps;
     }
 
-    if (options.seed) {
+    if (options.seed != null) {
       input.seed = options.seed;
     }
 
