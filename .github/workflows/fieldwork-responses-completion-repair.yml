@@ -47,6 +47,13 @@ jobs:
               """              const input = toolCall?.arguments ?? chunk.item.arguments ?? '';\n\n              if (chunk.item.status !== 'completed') {\n                toolCallsByItemId.delete(chunk.item.id);\n                return;\n              }\n\n              controller.enqueue({""",
           )
 
+          openai_api = 'packages/openai/src/responses/openai-responses-api.ts'
+          replace_once(
+              openai_api,
+              """            z.object({\n              type: z.literal('function_call'),\n              call_id: z.string(),\n              name: z.string(),\n              arguments: z.string(),\n              id: z.string(),\n              namespace: z.string().nullish(),""",
+              """            z.object({\n              type: z.literal('function_call'),\n              call_id: z.string(),\n              name: z.string(),\n              arguments: z.string(),\n              id: z.string(),\n              status: z.enum(['in_progress', 'completed', 'incomplete']),\n              namespace: z.string().nullish(),""",
+          )
+
           openai = 'packages/openai/src/responses/openai-responses-language-model.ts'
           replace_once(
               openai,
@@ -98,6 +105,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add packages/open-responses/src/responses/open-responses-language-model.ts \
+                  packages/openai/src/responses/openai-responses-api.ts \
                   packages/openai/src/responses/openai-responses-language-model.ts \
                   .github/workflows/fieldwork-responses-completion-repair.yml
           git commit -m "Gate incomplete Responses actions before execution"
