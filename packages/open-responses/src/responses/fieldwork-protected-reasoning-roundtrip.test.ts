@@ -1,4 +1,5 @@
 import type { LanguageModelV4Prompt } from '@ai-sdk/provider';
+import { mockId } from '@ai-sdk/provider-utils/test';
 import { createTestServer } from '@ai-sdk/test-server/with-vitest';
 import { describe, expect, it } from 'vitest';
 import { OpenResponsesLanguageModel } from './open-responses-language-model';
@@ -15,21 +16,9 @@ function createModel() {
     providerOptionsName: 'fieldwork',
     url: URL,
     headers: () => ({}),
+    generateId: mockId(),
   });
 }
-
-const tools = [
-  {
-    type: 'function' as const,
-    name: 'weather',
-    inputSchema: {
-      type: 'object',
-      properties: { location: { type: 'string' } },
-      required: ['location'],
-      additionalProperties: false,
-    },
-  },
-];
 
 function firstResponse({
   content,
@@ -59,12 +48,11 @@ function firstResponse({
         encrypted_content: encryptedContent,
       },
       {
-        id: 'fc_1',
-        call_id: 'call_1',
-        type: 'function_call',
-        name: 'weather',
-        arguments: '{"location":"San Francisco"}',
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
         status: 'completed',
+        content: [{ type: 'output_text', text: 'Continue when ready.' }],
       },
     ],
     usage: {
@@ -89,7 +77,7 @@ const finalResponse = {
       type: 'message',
       role: 'assistant',
       status: 'completed',
-      content: [{ type: 'output_text', text: 'done' }],
+      content: [{ type: 'output_text', text: 'Done.' }],
     },
   ],
   usage: {
@@ -101,42 +89,52 @@ const finalResponse = {
   },
 };
 
-async function runTwoTurnToolLoop(response: ReturnType<typeof firstResponse>) {
+async function runTwoTurnRoundTrip(response: ReturnType<typeof firstResponse>) {
   server.urls[URL].response = { type: 'json-value', body: response };
 
   const model = createModel();
   const initialPrompt: LanguageModelV4Prompt = [
-    { role: 'user', content: [{ type: 'text', text: 'Check the weather' }] },
+    { role: 'user', content: [{ type: 'text', text: 'Think about this' }] },
   ];
 
-  const first = await model.doGenerate({
-    prompt: initialPrompt,
-    tools,
+  const first = await model.doGenerate({ prompt: initialPrompt });
+
+  const assistantContent = first.content.flatMap(part => {
+    switch (part.type) {
+      case 'reasoning':
+        return [
+          {
+            type: 'reasoning' as const,
+            text: part.text,
+            ...(part.providerMetadata != null
+              ? { providerOptions: part.providerMetadata }
+              : {}),
+          },
+        ];
+      case 'text':
+        return [
+          {
+            type: 'text' as const,
+            text: part.text,
+            ...(part.providerMetadata != null
+              ? { providerOptions: part.providerMetadata }
+              : {}),
+          },
+        ];
+      default:
+        return [];
+    }
   });
 
   server.urls[URL].response = { type: 'json-value', body: finalResponse };
 
   const followupPrompt: LanguageModelV4Prompt = [
     ...initialPrompt,
-    { role: 'assistant', content: first.content },
-    {
-      role: 'tool',
-      content: [
-        {
-          type: 'tool-result',
-          toolCallId: 'call_1',
-          toolName: 'weather',
-          output: { type: 'json', value: { temperature: 72 } },
-        },
-      ],
-    },
+    { role: 'assistant', content: assistantContent },
     { role: 'user', content: [{ type: 'text', text: 'Continue' }] },
   ];
 
-  await model.doGenerate({
-    prompt: followupPrompt,
-    tools,
-  });
+  await model.doGenerate({ prompt: followupPrompt });
 
   return {
     first,
@@ -145,8 +143,8 @@ async function runTwoTurnToolLoop(response: ReturnType<typeof firstResponse>) {
 }
 
 describe('Fieldwork: Open Responses protected reasoning round trip', () => {
-  it('drops protected reasoning that has no raw content before the next tool-loop turn', async () => {
-    const { first, secondRequest } = await runTwoTurnToolLoop(
+  it('drops protected reasoning and its safe summary before the next turn', async () => {
+    const { first, secondRequest } = await runTwoTurnRoundTrip(
       firstResponse({
         content: [],
         encryptedContent: 'opaque-provider-state',
@@ -163,7 +161,7 @@ describe('Fieldwork: Open Responses protected reasoning round trip', () => {
   });
 
   it('keeps raw reasoning text through the same next-turn replay path', async () => {
-    const { first, secondRequest } = await runTwoTurnToolLoop(
+    const { first, secondRequest } = await runTwoTurnRoundTrip(
       firstResponse({
         content: [
           {
