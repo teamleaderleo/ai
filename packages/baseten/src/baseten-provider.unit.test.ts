@@ -176,6 +176,41 @@ describe('BasetenProvider', () => {
       });
     });
 
+    describe('usage conversion', () => {
+      it('keeps managed Model APIs reasoning within completion aggregate', () => {
+        createBaseten().chatModel('moonshotai/Kimi-K3');
+        const config = OpenAICompatibleChatLanguageModelMock.mock.calls[0][1];
+        const usage = {
+          prompt_tokens: 951,
+          completion_tokens: 6000,
+          total_tokens: 6952,
+          prompt_tokens_details: { cached_tokens: 60 },
+          completion_tokens_details: { reasoning_tokens: 6001 },
+        };
+
+        expect(config.convertUsage(usage)).toEqual({
+          inputTokens: {
+            total: 951,
+            noCache: 891,
+            cacheRead: 60,
+            cacheWrite: undefined,
+          },
+          outputTokens: { total: 6000, text: 0, reasoning: 6000 },
+          raw: usage,
+        });
+      });
+
+      it('leaves dedicated /sync/v1 deployments on generic conversion', () => {
+        createBaseten({
+          modelURL:
+            'https://model-123.api.baseten.co/environments/production/sync/v1',
+        }).chatModel('custom-model');
+
+        const config = OpenAICompatibleChatLanguageModelMock.mock.calls[0][1];
+        expect(config.convertUsage).toBeUndefined();
+      });
+    });
+
     // Baseten sends a bare string from the Model APIs but lets dedicated
     // deployments pass through their server's OpenAI-shaped object, so the
     // schema has to accept both. A failed parse degrades the message to the

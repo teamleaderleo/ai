@@ -4,6 +4,10 @@ import {
   type ProviderErrorStructure,
 } from '@ai-sdk/openai-compatible';
 import {
+  convertOpenAICompatibleChatUsage,
+  type OpenAICompatibleChatConfig,
+} from '@ai-sdk/openai-compatible/internal';
+import {
   NoSuchModelError,
   type EmbeddingModelV4,
   type LanguageModelV4,
@@ -71,6 +75,36 @@ const basetenErrorStructure: ProviderErrorStructure<BasetenErrorData> = {
   errorSchema: basetenErrorSchema,
   errorToMessage: data =>
     typeof data.error === 'string' ? data.error : data.error.message,
+};
+
+// Baseten Model APIs document reasoning tokens as part of completion_tokens.
+// If an upstream response contradicts that contract, preserve the literal
+// counters in raw usage but do not publish a reasoning detail larger than its
+// normalized output aggregate. Dedicated deployments are intentionally left on
+// generic OpenAI-compatible conversion because their server semantics are not
+// owned by the Model APIs contract.
+const convertBasetenModelApiChatUsage: NonNullable<
+  OpenAICompatibleChatConfig['convertUsage']
+> = usage => {
+  const converted = convertOpenAICompatibleChatUsage(usage);
+  const { total, reasoning } = converted.outputTokens;
+
+  if (
+    total !== undefined &&
+    reasoning !== undefined &&
+    reasoning > total
+  ) {
+    return {
+      ...converted,
+      outputTokens: {
+        ...converted.outputTokens,
+        reasoning: total,
+        text: 0,
+      },
+    };
+  }
+
+  return converted;
 };
 
 export interface BasetenProviderSettings {
@@ -215,6 +249,7 @@ export function createBaseten(
       ...getCommonModelConfig('chat'),
       errorStructure: basetenErrorStructure,
       includeUsage: true,
+      convertUsage: convertBasetenModelApiChatUsage,
     });
   };
 
