@@ -1,0 +1,49 @@
+name: Fieldwork Claude permission parity final repair
+
+on:
+  pull_request:
+    branches:
+      - candidate/claude-permission-kind-parity-7d40
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Exact five-file source fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=7d40fafc394a2c9033f931eb85c895e3817f4b58
+          git fetch --no-tags --depth=1 origin "$base"
+          git diff --check "$base" HEAD
+          actual="$(git diff --name-only "$base" HEAD | grep -v '^.github/workflows/fieldwork-claude-permission-kind-parity-final-repair.yml$' | sort)"
+          expected="$(printf '%s\n' \
+            '.changeset/claude-permission-kind-parity.md' \
+            'packages/harness-claude-code/src/bridge/index.ts' \
+            'packages/harness-claude-code/src/bridge/native-tool-kind-parity.test.ts' \
+            'packages/harness-claude-code/src/claude-code-harness.ts' \
+            'packages/harness-claude-code/src/native-tool-kinds.ts' | sort)"
+          test "$actual" = "$expected"
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Build host and sandbox bridge entries
+        run: pnpm -C packages/harness-claude-code build
+      - name: Verify shared map survives bridge bundling
+        run: |
+          grep -Fq 'Agent' packages/harness-claude-code/dist/bridge/index.mjs
+          grep -Fq 'PowerShell' packages/harness-claude-code/dist/bridge/index.mjs
+          grep -Fq 'CronList' packages/harness-claude-code/dist/bridge/index.mjs
+      - name: Focused exhaustive permission parity regression
+        run: pnpm -C packages/harness-claude-code exec vitest --config vitest.node.config.js --run src/bridge/native-tool-kind-parity.test.ts
+      - name: Full Node package tests
+        run: pnpm -C packages/harness-claude-code test:node
