@@ -122,8 +122,8 @@ jobs:
           )
           replace_once(
               openai,
-              """                controller.enqueue({\n                  type: 'tool-input-end',\n                  id: value.item.call_id,\n                });\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName,""",
-              """                controller.enqueue({\n                  type: 'tool-input-end',\n                  id: value.item.call_id,\n                });\n\n                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                hasFunctionCall = true;\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName,""",
+              """                const toolName = toolNameMapping.toCustomToolName(\n                  value.item.name,\n                );\n\n                controller.enqueue({\n                  type: 'tool-input-end',\n                  id: value.item.call_id,\n                });\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName,""",
+              """                const toolName = toolNameMapping.toCustomToolName(\n                  value.item.name,\n                );\n\n                controller.enqueue({\n                  type: 'tool-input-end',\n                  id: value.item.call_id,\n                });\n\n                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                hasFunctionCall = true;\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName,""",
           )
           replace_once(
               openai,
