@@ -2,14 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { MockImageModelV4 } from '../test/mock-image-model-v4';
 import { generateImage } from './generate-image';
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(resolvePromise => {
     resolve = resolvePromise;
-    reject = rejectPromise;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
 const imageResult = () => ({
@@ -25,10 +23,10 @@ const imageResult = () => ({
 
 describe('Fieldwork #868: generateImage fanout failure ownership', () => {
   it('lets a sibling model call continue after the aggregate promise rejects', async () => {
-    const bothStarted = deferred<void>();
-    const failFirst = deferred<void>();
-    const releaseSibling = deferred<void>();
-    const siblingFinished = deferred<void>();
+    const bothStarted = deferred();
+    const failFirst = deferred();
+    const releaseSibling = deferred();
+    const siblingFinished = deferred();
     const failure = new Error('first image child failed');
     let started = 0;
     let siblingCompleted = false;
