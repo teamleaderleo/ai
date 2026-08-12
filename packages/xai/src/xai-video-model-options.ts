@@ -134,8 +134,16 @@ const runtimeSchema = z
   .looseObject({
     mode: modeSchema.optional(),
     videoUrl: nonEmptyStringSchema.optional(),
-    referenceImageUrls: z.array(nonEmptyStringSchema).max(7).optional(),
-    referenceImageFileIds: z.array(nonEmptyStringSchema).max(7).optional(),
+    referenceImageUrls: z
+      .array(nonEmptyStringSchema)
+      .min(1)
+      .max(7)
+      .optional(),
+    referenceImageFileIds: z
+      .array(nonEmptyStringSchema)
+      .min(1)
+      .max(7)
+      .optional(),
     referenceVoiceIds: z.array(nonEmptyStringSchema).max(3).optional(),
     user: z.string().optional(),
     ...baseFields,
