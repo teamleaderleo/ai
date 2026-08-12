@@ -28,9 +28,11 @@ export async function downloadBlob(
     });
 
     if (!response.ok) {
-      // Release the connection before rejecting so an error status from an
-      // attacker-controlled origin cannot leak open sockets.
-      await cancelResponseBody(response);
+      // Initiate connection cleanup without waiting for stream cancellation to
+      // settle. A cloned Response is backed by a teed stream whose cancel
+      // promise can wait for sibling branches, and HTTP status rejection must
+      // not inherit another consumer's lifetime.
+      void cancelResponseBody(response);
       throw new DownloadError({
         url,
         statusCode: response.status,
