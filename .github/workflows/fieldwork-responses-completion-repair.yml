@@ -1,0 +1,102 @@
+name: Fieldwork Responses completion repair
+
+on:
+  push:
+    branches:
+      - repair/responses-action-completion-gating-20260812
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply completion gates
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              p.write_text(text.replace(old, new, 1))
+
+          open_responses = 'packages/open-responses/src/responses/open-responses-language-model.ts'
+          replace_once(
+              open_responses,
+              """        case 'function_call': {\n          hasToolCalls = true;""",
+              """        case 'function_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          hasToolCalls = true;""",
+          )
+          replace_once(
+              open_responses,
+              """              const input = toolCall?.arguments ?? chunk.item.arguments ?? '';\n\n              controller.enqueue({""",
+              """              const input = toolCall?.arguments ?? chunk.item.arguments ?? '';\n\n              if (chunk.item.status !== 'completed') {\n                toolCallsByItemId.delete(chunk.item.id);\n                return;\n              }\n\n              controller.enqueue({""",
+          )
+
+          openai = 'packages/openai/src/responses/openai-responses-language-model.ts'
+          replace_once(
+              openai,
+              """        case 'function_call': {\n          hasFunctionCall = true;""",
+              """        case 'function_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          hasFunctionCall = true;""",
+          )
+          replace_once(
+              openai,
+              """        case 'shell_call': {\n          content.push({""",
+              """        case 'shell_call': {\n          if (!isShellProviderExecuted && part.status !== 'completed') {\n            break;\n          }\n\n          content.push({""",
+          )
+          replace_once(
+              openai,
+              """        case 'apply_patch_call': {\n          content.push({""",
+              """        case 'apply_patch_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          content.push({""",
+          )
+          replace_once(
+              openai,
+              """              } else if (value.item.type === 'function_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n                hasFunctionCall = true;\n\n                controller.enqueue({""",
+              """              } else if (value.item.type === 'function_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
+          )
+          replace_once(
+              openai,
+              """                });\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName: value.item.name,""",
+              """                });\n\n                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                hasFunctionCall = true;\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName: value.item.name,""",
+          )
+          replace_once(
+              openai,
+              """              } else if (value.item.type === 'shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
+              """              } else if (value.item.type === 'shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                if (\n                  !isShellProviderExecuted &&\n                  value.item.status !== 'completed'\n                ) {\n                  return;\n                }\n\n                controller.enqueue({""",
+          )
+          PY
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run Open Responses regression
+        run: pnpm -C packages/open-responses exec vitest --config vitest.node.config.js --run src/responses/open-responses-completion-status.test.ts
+      - name: Run native OpenAI regression
+        run: pnpm -C packages/openai exec vitest --config vitest.node.config.js --run src/responses/openai-responses-completion-status.test.ts
+      - name: Type-check affected packages
+        run: |
+          pnpm -C packages/open-responses type-check
+          pnpm -C packages/openai type-check
+      - name: Commit verified repair and remove carrier
+        shell: bash
+        run: |
+          rm .github/workflows/fieldwork-responses-completion-repair.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/open-responses/src/responses/open-responses-language-model.ts \
+                  packages/openai/src/responses/openai-responses-language-model.ts \
+                  .github/workflows/fieldwork-responses-completion-repair.yml
+          git commit -m "Gate incomplete Responses actions before execution"
+          git push origin HEAD:repair/responses-action-completion-gating-20260812
