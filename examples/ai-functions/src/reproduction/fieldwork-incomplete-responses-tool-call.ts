@@ -1,13 +1,15 @@
 import { createOpenResponses } from '@ai-sdk/open-responses';
-import { generateText, stepCountIs, tool } from 'ai';
+import { generateText, stepCountIs, streamText, tool } from 'ai';
 import { z } from 'zod';
 
-function responseWithToolCall(status: 'completed' | 'incomplete') {
+type CallStatus = 'completed' | 'incomplete';
+
+function responseWithToolCall(status: CallStatus) {
   return {
     id: `resp_${status}`,
     object: 'response',
     created_at: 1,
-    status: status === 'completed' ? 'completed' : 'incomplete',
+    status,
     incomplete_details:
       status === 'incomplete' ? { reason: 'max_output_tokens' } : null,
     model: 'fieldwork-model',
@@ -31,68 +33,138 @@ function responseWithToolCall(status: 'completed' | 'incomplete') {
   };
 }
 
-async function run(status: 'completed' | 'incomplete') {
+function sseResponse(status: CallStatus) {
+  const item = responseWithToolCall(status).output[0];
+  const terminal =
+    status === 'completed'
+      ? {
+          type: 'response.completed',
+          sequence_number: 2,
+          response: responseWithToolCall(status),
+        }
+      : {
+          type: 'response.incomplete',
+          sequence_number: 2,
+          response: responseWithToolCall(status),
+        };
+
+  const events = [
+    {
+      type: 'response.output_item.added',
+      sequence_number: 0,
+      output_index: 0,
+      item,
+    },
+    {
+      type: 'response.output_item.done',
+      sequence_number: 1,
+      output_index: 0,
+      item,
+    },
+    terminal,
+  ];
+
+  return new Response(
+    events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') +
+      'data: [DONE]\n\n',
+    {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    },
+  );
+}
+
+function makeTool(executions: string[]) {
+  return tool({
+    inputSchema: z.object({ resource: z.string() }),
+    execute: async ({ resource }) => {
+      executions.push(resource);
+      return { recorded: resource };
+    },
+  });
+}
+
+async function runGenerate(status: CallStatus) {
   const executions: string[] = [];
-  let requests = 0;
 
   const provider = createOpenResponses({
     name: 'fieldwork',
     url: 'https://fieldwork.invalid/v1/responses',
-    fetch: async () => {
-      requests += 1;
-      return new Response(JSON.stringify(responseWithToolCall(status)), {
+    fetch: async () =>
+      new Response(JSON.stringify(responseWithToolCall(status)), {
         status: 200,
         headers: { 'content-type': 'application/json' },
-      });
-    },
+      }),
   });
 
   const result = await generateText({
     model: provider('fieldwork-model'),
     prompt: 'Inspect the record and decide whether to act.',
     stopWhen: stepCountIs(1),
-    tools: {
-      recordAction: tool({
-        inputSchema: z.object({ resource: z.string() }),
-        execute: async ({ resource }) => {
-          executions.push(resource);
-          return { recorded: resource };
-        },
-      }),
-    },
+    tools: { recordAction: makeTool(executions) },
   });
 
   return {
-    status,
-    requests,
     executions,
     finishReason: result.finishReason,
-    toolCalls: result.toolCalls.map(call => ({
-      toolCallId: call.toolCallId,
-      toolName: call.toolName,
-      input: call.input,
-    })),
+    toolCalls: result.toolCalls.length,
     toolResults: result.toolResults.length,
   };
 }
 
-const completed = await run('completed');
-const incomplete = await run('incomplete');
+async function runStream(status: CallStatus) {
+  const executions: string[] = [];
 
-console.log(JSON.stringify({ completed, incomplete }, null, 2));
+  const provider = createOpenResponses({
+    name: 'fieldwork',
+    url: 'https://fieldwork.invalid/v1/responses',
+    fetch: async () => sseResponse(status),
+  });
 
-if (completed.executions.length !== 1) {
-  throw new Error('completed control did not execute exactly once');
+  const result = streamText({
+    model: provider('fieldwork-model'),
+    prompt: 'Inspect the record and decide whether to act.',
+    stopWhen: stepCountIs(1),
+    tools: { recordAction: makeTool(executions) },
+  });
+
+  await result.consumeStream();
+
+  return {
+    executions,
+    finishReason: await result.finishReason,
+    toolCalls: (await result.toolCalls).length,
+    toolResults: (await result.toolResults).length,
+  };
 }
 
-if (incomplete.executions.length !== 1) {
-  throw new Error(
-    `current-source discriminator changed: incomplete call executed ${incomplete.executions.length} times`,
-  );
-}
+const observed = {
+  generate: {
+    completed: await runGenerate('completed'),
+    incomplete: await runGenerate('incomplete'),
+  },
+  stream: {
+    completed: await runStream('completed'),
+    incomplete: await runStream('incomplete'),
+  },
+};
 
-if (incomplete.finishReason !== 'length') {
-  throw new Error(
-    `expected incomplete response to retain length finish reason, got ${incomplete.finishReason}`,
-  );
+console.log(JSON.stringify(observed, null, 2));
+
+for (const [mode, cases] of Object.entries(observed)) {
+  if (cases.completed.executions.length !== 1) {
+    throw new Error(`${mode} completed control did not execute exactly once`);
+  }
+
+  if (cases.incomplete.executions.length !== 1) {
+    throw new Error(
+      `${mode} current-source discriminator changed: incomplete call executed ${cases.incomplete.executions.length} times`,
+    );
+  }
+
+  if (cases.incomplete.finishReason !== 'length') {
+    throw new Error(
+      `${mode} expected incomplete response to retain length finish reason, got ${cases.incomplete.finishReason}`,
+    );
+  }
 }
