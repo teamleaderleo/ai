@@ -1,0 +1,104 @@
+name: Fieldwork Claude external MCP stacked repair
+
+on:
+  pull_request:
+    branches:
+      - candidate/claude-external-mcp-permission-814
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/claude-external-mcp-permission-814
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply external MCP repair on Claude parity candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=2d0684e66cc77807876c600d32df46365227e8f6
+          OLD=acb8abd02bf94f27ee9207e0a3913fb6c1e64e60
+          test "$(git rev-parse HEAD)" = "$BASE"
+          git fetch origin "$OLD"
+          python <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          old = 'acb8abd02bf94f27ee9207e0a3913fb6c1e64e60'
+          bridge = Path('packages/harness-claude-code/src/bridge/index.ts')
+          text = bridge.read_text()
+          needle = "  const inactiveNativeTools = new Set(input.inactiveNativeTools);\n"
+          addition = (
+              needle
+              + "  const externalMcpToolPrefixes = Object.keys(input.start.mcpServers ?? {}).map(\n"
+              + "    serverName => `mcp__${serverName}__`,\n"
+              + "  );\n"
+          )
+          assert text.count(needle) == 1
+          text = text.replace(needle, addition, 1)
+          old_if = "      if (toolName.startsWith('mcp__harness-tools__')) {\n"
+          new_if = (
+              "      if (\n"
+              "        toolName.startsWith('mcp__harness-tools__') ||\n"
+              "        externalMcpToolPrefixes.some(prefix => toolName.startsWith(prefix))\n"
+              "      ) {\n"
+          )
+          assert text.count(old_if) == 1
+          bridge.write_text(text.replace(old_if, new_if, 1))
+
+          test_path = 'packages/harness-claude-code/src/bridge/external-mcp-permission-boundary.test.ts'
+          test_text = subprocess.check_output(['git', 'show', f'{old}:{test_path}'], text=True)
+          test_text = test_text.replace("from '../claude-code-harness'", "from './claude-code-harness'")
+          test_text = test_text.replace("await import('./index')", "await import('./bridge/index')")
+          Path('packages/harness-claude-code/src/external-mcp-permission-boundary.test.ts').write_text(test_text)
+
+          changeset = subprocess.check_output(
+              ['git', 'show', f'{old}:.changeset/claude-external-mcp-permission.md'], text=True
+          )
+          Path('.changeset/claude-external-mcp-permission.md').write_text(changeset)
+          PY
+          git config user.name 'Fieldwork Repair'
+          git config user.email 'fieldwork-repair@users.noreply.github.com'
+          git add .changeset/claude-external-mcp-permission.md \
+            packages/harness-claude-code/src/bridge/index.ts \
+            packages/harness-claude-code/src/external-mcp-permission-boundary.test.ts
+          git commit -m 'fix(harness-claude-code): keep external MCP outside builtin permissions'
+          test "$(git rev-parse HEAD^)" = "$BASE"
+      - name: Verify exact stacked source fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=2d0684e66cc77807876c600d32df46365227e8f6
+          git diff --check "$BASE"...HEAD
+          git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+          printf '%s\n' \
+            .changeset/claude-external-mcp-permission.md \
+            packages/harness-claude-code/src/bridge/index.ts \
+            packages/harness-claude-code/src/external-mcp-permission-boundary.test.ts \
+            | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+      - run: pnpm install --frozen-lockfile
+      - name: Repository code consistency
+        run: pnpm konsistent
+      - name: Package type check
+        run: pnpm -C packages/harness-claude-code type-check
+      - name: Build host and sandbox bridge entries
+        run: pnpm -C packages/harness-claude-code build
+      - name: Focused stacked permission regressions
+        run: pnpm -C packages/harness-claude-code exec vitest --config vitest.node.config.js --run src/external-mcp-permission-boundary.test.ts src/native-tool-kind-parity.test.ts
+      - name: Full Node package tests
+        run: pnpm -C packages/harness-claude-code test:node
+      - name: Publish repaired stacked candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/candidate/claude-external-mcp-permission-814
