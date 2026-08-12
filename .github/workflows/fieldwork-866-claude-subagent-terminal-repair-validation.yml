@@ -25,8 +25,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check changed TypeScript formatting
-        run: pnpm exec oxfmt --check packages/harness-claude-code/src/bridge/create-emit-stream-event.ts packages/harness-claude-code/src/bridge/fieldwork-subagent-terminal-fallback.test.ts
+      - name: Format focused test and print exact formatter diff
+        run: |
+          pnpm exec oxfmt packages/harness-claude-code/src/bridge/fieldwork-subagent-terminal-fallback.test.ts
+          git diff -- packages/harness-claude-code/src/bridge/fieldwork-subagent-terminal-fallback.test.ts
+
+      - name: Check production source formatting
+        run: pnpm exec oxfmt --check packages/harness-claude-code/src/bridge/create-emit-stream-event.ts
 
       - name: Type-check Claude harness
         run: pnpm --filter @ai-sdk/harness-claude-code type-check
