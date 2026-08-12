@@ -35,6 +35,16 @@ jobs:
                   raise SystemExit(f'{path}: expected one replacement, found {count}')
               p.write_text(text.replace(old, new, 1))
 
+          def replace_exact(path: str, old: str, new: str, expected: int):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(
+                      f'{path}: expected {expected} replacements, found {count}'
+                  )
+              p.write_text(text.replace(old, new))
+
           open_responses = 'packages/open-responses/src/responses/open-responses-language-model.ts'
           replace_once(
               open_responses,
@@ -53,12 +63,23 @@ jobs:
               """            z.object({\n              type: z.literal('function_call'),\n              call_id: z.string(),\n              name: z.string(),\n              arguments: z.string(),\n              id: z.string(),\n              namespace: z.string().nullish(),""",
               """            z.object({\n              type: z.literal('function_call'),\n              call_id: z.string(),\n              name: z.string(),\n              arguments: z.string(),\n              id: z.string(),\n              status: z.enum(['in_progress', 'completed', 'incomplete']),\n              namespace: z.string().nullish(),""",
           )
+          replace_exact(
+              openai_api,
+              """          z.object({\n            type: z.literal('local_shell_call'),\n            id: z.string(),\n            call_id: z.string(),\n            action: z.object({""",
+              """          z.object({\n            type: z.literal('local_shell_call'),\n            id: z.string(),\n            call_id: z.string(),\n            status: z.enum(['in_progress', 'completed', 'incomplete']),\n            action: z.object({""",
+              2,
+          )
 
           openai = 'packages/openai/src/responses/openai-responses-language-model.ts'
           replace_once(
               openai,
               """        case 'function_call': {\n          hasFunctionCall = true;""",
               """        case 'function_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          hasFunctionCall = true;""",
+          )
+          replace_once(
+              openai,
+              """        case 'local_shell_call': {\n          content.push({""",
+              """        case 'local_shell_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          content.push({""",
           )
           replace_once(
               openai,
@@ -87,6 +108,11 @@ jobs:
           )
           replace_once(
               openai,
+              """              } else if (value.item.type === 'local_shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
+              """              } else if (value.item.type === 'local_shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                controller.enqueue({""",
+          )
+          replace_once(
+              openai,
               """              } else if (value.item.type === 'shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
               """              } else if (value.item.type === 'shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                if (\n                  !isShellProviderExecuted &&\n                  value.item.status !== 'completed'\n                ) {\n                  return;\n                }\n\n                controller.enqueue({""",
           )
@@ -105,17 +131,17 @@ jobs:
           replace_once(
               native_test,
               "type ApplyPatchStatus = 'completed' | 'in_progress';\n",
-              "type ApplyPatchStatus = 'completed' | 'in_progress';\ntype ToolSearchStatus = 'completed' | 'incomplete';\n",
+              "type ApplyPatchStatus = 'completed' | 'in_progress';\ntype LocalShellStatus = 'completed' | 'incomplete';\ntype ToolSearchStatus = 'completed' | 'incomplete';\n",
           )
           replace_once(
               native_test,
               "  | { kind: 'applyPatch'; status: ApplyPatchStatus };",
-              "  | { kind: 'applyPatch'; status: ApplyPatchStatus }\n  | { kind: 'toolSearch'; status: ToolSearchStatus };",
+              "  | { kind: 'applyPatch'; status: ApplyPatchStatus }\n  | { kind: 'localShell'; status: LocalShellStatus }\n  | { kind: 'toolSearch'; status: ToolSearchStatus };",
           )
           replace_once(
               native_test,
               """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n  }""",
-              """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n    case 'toolSearch':\n      return {\n        id: 'ts_1',\n        type: 'tool_search_call' as const,\n        execution: 'client' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        arguments: { goal: 'find a weather tool' },\n      };\n  }""",
+              """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n    case 'localShell':\n      return {\n        id: 'ls_1',\n        type: 'local_shell_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        action: {\n          type: 'exec' as const,\n          command: ['echo', 'fieldwork-sentinel'],\n          env: {},\n        },\n      };\n    case 'toolSearch':\n      return {\n        id: 'ts_1',\n        type: 'tool_search_call' as const,\n        execution: 'client' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        arguments: { goal: 'find a weather tool' },\n      };\n  }""",
           )
           replace_once(
               native_test,
@@ -125,12 +151,12 @@ jobs:
           replace_once(
               native_test,
               """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n  }""",
-              """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n    case 'toolSearch':\n      return [\n        openaiTools.toolSearch({\n          execution: 'client',\n          description: 'Search available tools.',\n          parameters: {\n            type: 'object',\n            properties: { goal: { type: 'string' } },\n            required: ['goal'],\n            additionalProperties: false,\n          },\n        }),\n      ];\n  }""",
+              """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n    case 'localShell':\n      return [openaiTools.localShell({})];\n    case 'toolSearch':\n      return [\n        openaiTools.toolSearch({\n          execution: 'client',\n          description: 'Search available tools.',\n          parameters: {\n            type: 'object',\n            properties: { goal: { type: 'string' } },\n            required: ['goal'],\n            additionalProperties: false,\n          },\n        }),\n      ];\n  }""",
           )
           replace_once(
               native_test,
               """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n];""",
-              """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n  { kind: 'toolSearch', status: 'completed' },\n  { kind: 'toolSearch', status: 'incomplete' },\n];""",
+              """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n  { kind: 'localShell', status: 'completed' },\n  { kind: 'localShell', status: 'incomplete' },\n  { kind: 'toolSearch', status: 'completed' },\n  { kind: 'toolSearch', status: 'incomplete' },\n];""",
           )
           PY
       - name: Install dependencies
