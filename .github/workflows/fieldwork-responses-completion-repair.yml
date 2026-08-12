@@ -72,6 +72,11 @@ jobs:
           )
           replace_once(
               openai,
+              """        case 'tool_search_call': {\n          const toolCallId = part.call_id ?? part.id;\n          const isHosted = part.execution === 'server';\n\n          if (isHosted) {""",
+              """        case 'tool_search_call': {\n          const toolCallId = part.call_id ?? part.id;\n          const isHosted = part.execution === 'server';\n\n          if (!isHosted && part.status !== 'completed') {\n            break;\n          }\n\n          if (isHosted) {""",
+          )
+          replace_once(
+              openai,
               """              } else if (value.item.type === 'function_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n                hasFunctionCall = true;\n\n                controller.enqueue({""",
               """              } else if (value.item.type === 'function_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
           )
@@ -84,6 +89,48 @@ jobs:
               openai,
               """              } else if (value.item.type === 'shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
               """              } else if (value.item.type === 'shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                if (\n                  !isShellProviderExecuted &&\n                  value.item.status !== 'completed'\n                ) {\n                  return;\n                }\n\n                controller.enqueue({""",
+          )
+          replace_once(
+              openai,
+              """                  if (isHosted) {\n                    hostedToolSearchCallIds.push(toolCallId);\n                  } else {\n                    controller.enqueue({\n                      type: 'tool-input-start',\n                      id: toolCallId,\n                      toolName: toolCall.toolName,\n                    });\n                  }\n\n                  controller.enqueue({\n                    type: 'tool-input-end',\n                    id: toolCallId,\n                  });\n\n                  controller.enqueue({""",
+              """                  if (isHosted) {\n                    hostedToolSearchCallIds.push(toolCallId);\n                  } else {\n                    controller.enqueue({\n                      type: 'tool-input-start',\n                      id: toolCallId,\n                      toolName: toolCall.toolName,\n                    });\n                  }\n\n                  controller.enqueue({\n                    type: 'tool-input-end',\n                    id: toolCallId,\n                  });\n\n                  if (!isHosted && value.item.status !== 'completed') {\n                    ongoingToolCalls[value.output_index] = undefined;\n                    return;\n                  }\n\n                  controller.enqueue({""",
+          )
+
+          native_test = 'packages/openai/src/responses/openai-responses-completion-status.test.ts'
+          replace_once(
+              native_test,
+              "import type { LanguageModelV4Prompt, LanguageModelV4Tool } from '@ai-sdk/provider';",
+              "import type { LanguageModelV4Prompt } from '@ai-sdk/provider';",
+          )
+          replace_once(
+              native_test,
+              "type ApplyPatchStatus = 'completed' | 'in_progress';\n",
+              "type ApplyPatchStatus = 'completed' | 'in_progress';\ntype ToolSearchStatus = 'completed' | 'incomplete';\n",
+          )
+          replace_once(
+              native_test,
+              "  | { kind: 'applyPatch'; status: ApplyPatchStatus };",
+              "  | { kind: 'applyPatch'; status: ApplyPatchStatus }\n  | { kind: 'toolSearch'; status: ToolSearchStatus };",
+          )
+          replace_once(
+              native_test,
+              """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n  }""",
+              """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n    case 'toolSearch':\n      return {\n        id: 'ts_1',\n        type: 'tool_search_call' as const,\n        execution: 'client' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        arguments: { goal: 'find a weather tool' },\n      };\n  }""",
+          )
+          replace_once(
+              native_test,
+              "function toolsFor(testCase: StatusCase): LanguageModelV4Tool[] | undefined {",
+              "function toolsFor(testCase: StatusCase) {",
+          )
+          replace_once(
+              native_test,
+              """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n  }""",
+              """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n    case 'toolSearch':\n      return [\n        openaiTools.toolSearch({\n          execution: 'client',\n          description: 'Search available tools.',\n          parameters: {\n            type: 'object',\n            properties: { goal: { type: 'string' } },\n            required: ['goal'],\n            additionalProperties: false,\n          },\n        }),\n      ];\n  }""",
+          )
+          replace_once(
+              native_test,
+              """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n];""",
+              """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n  { kind: 'toolSearch', status: 'completed' },\n  { kind: 'toolSearch', status: 'incomplete' },\n];""",
           )
           PY
       - name: Install dependencies
@@ -107,6 +154,7 @@ jobs:
           git add packages/open-responses/src/responses/open-responses-language-model.ts \
                   packages/openai/src/responses/openai-responses-api.ts \
                   packages/openai/src/responses/openai-responses-language-model.ts \
+                  packages/openai/src/responses/openai-responses-completion-status.test.ts \
                   .github/workflows/fieldwork-responses-completion-repair.yml
           git commit -m "Gate incomplete Responses actions before execution"
           git push origin HEAD:repair/responses-action-completion-gating-20260812
