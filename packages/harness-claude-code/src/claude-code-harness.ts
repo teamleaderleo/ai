@@ -261,29 +261,32 @@ const CLAUDE_CODE_BUILTIN_TOOLS = {
       ),
     }),
   }),
-  Agent: tool({
-    description: 'Spawn a subagent with a task',
-    inputSchema: z.object({
-      description: z.string(),
-      prompt: z.string(),
-      subagent_type: z.string().optional(),
-      model: z.enum(['sonnet', 'opus', 'haiku']).optional(),
-      run_in_background: z.boolean().optional(),
-      name: z.string().optional(),
-      team_name: z.string().optional(),
-      mode: z
-        .enum([
-          'acceptEdits',
-          'auto',
-          'bypassPermissions',
-          'default',
-          'dontAsk',
-          'plan',
-        ])
-        .optional(),
-      isolation: z.literal('worktree').optional(),
+  Agent: {
+    ...tool({
+      description: 'Spawn a subagent with a task',
+      inputSchema: z.object({
+        description: z.string(),
+        prompt: z.string(),
+        subagent_type: z.string().optional(),
+        model: z.enum(['sonnet', 'opus', 'haiku']).optional(),
+        run_in_background: z.boolean().optional(),
+        name: z.string().optional(),
+        team_name: z.string().optional(),
+        mode: z
+          .enum([
+            'acceptEdits',
+            'auto',
+            'bypassPermissions',
+            'default',
+            'dontAsk',
+            'plan',
+          ])
+          .optional(),
+        isolation: z.literal('worktree').optional(),
+      }),
     }),
-  }),
+    toolUseKind: 'bash',
+  },
   TaskCreate: tool({
     description: 'Create a task in the session-local task list',
     inputSchema: z.object({
