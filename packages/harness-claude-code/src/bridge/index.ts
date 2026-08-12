@@ -11,7 +11,7 @@ import {
 } from '@ai-sdk/harness/bridge';
 import { createCompactionLatch } from './compaction-latch';
 import type { StartMessage } from '../claude-code-bridge-protocol';
-import { CLAUDE_CODE_NATIVE_TOOL_KINDS as NATIVE_TOOL_KINDS } from '../native-tool-kinds';
+import { CLAUDE_CODE_NATIVE_TOOL_KINDS as NATIVE_TOOL_KINDS } from './native-tool-kinds';
 import { randomUUID } from 'node:crypto';
 import { argv, env as procEnv, stdout } from 'node:process';
 

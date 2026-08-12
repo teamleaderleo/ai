@@ -1,5 +1,5 @@
-import { createClaudeCode } from '../claude-code-harness';
-import { CLAUDE_CODE_NATIVE_TOOL_KINDS } from '../native-tool-kinds';
+import { createClaudeCode } from './claude-code-harness';
+import { CLAUDE_CODE_NATIVE_TOOL_KINDS } from './bridge/native-tool-kinds';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 type QueryArgs = {
@@ -95,7 +95,7 @@ async function loadOptions(
     permissionMode,
   };
 
-  await import('./index');
+  await import('./bridge/index');
   const options = state.queryArgs[0]?.options;
   expect(options).toBeDefined();
   return options!;
