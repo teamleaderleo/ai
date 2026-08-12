@@ -1,7 +1,8 @@
-import type { LanguageModelV4Prompt } from '@ai-sdk/provider';
+import type { LanguageModelV4Prompt, LanguageModelV4Tool } from '@ai-sdk/provider';
 import { convertReadableStreamToArray, mockId } from '@ai-sdk/provider-utils/test';
 import { createTestServer } from '@ai-sdk/test-server/with-vitest';
 import { describe, expect, it } from 'vitest';
+import { openaiTools } from '../openai-tools';
 import { OpenAIResponsesLanguageModel } from './openai-responses-language-model';
 
 const URL = 'https://api.openai.com/v1/responses';
@@ -45,6 +46,17 @@ function outputItem(testCase: StatusCase) {
         status: testCase.status,
         operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },
       };
+  }
+}
+
+function toolsFor(testCase: StatusCase): LanguageModelV4Tool[] | undefined {
+  switch (testCase.kind) {
+    case 'function':
+      return undefined;
+    case 'shell':
+      return [openaiTools.shell({})];
+    case 'applyPatch':
+      return [openaiTools.applyPatch({})];
   }
 }
 
@@ -108,7 +120,10 @@ describe('OpenAIResponsesLanguageModel completion status', () => {
         body: responseBody(testCase),
       };
 
-      const result = await createModel().doGenerate({ prompt: TEST_PROMPT });
+      const result = await createModel().doGenerate({
+        prompt: TEST_PROMPT,
+        tools: toolsFor(testCase),
+      });
       const toolCalls = result.content.filter(part => part.type === 'tool-call');
 
       expect(toolCalls).toHaveLength(isCompleted(testCase) ? 1 : 0);
@@ -173,7 +188,10 @@ describe('OpenAIResponsesLanguageModel completion status', () => {
         ],
       };
 
-      const result = await createModel().doStream({ prompt: TEST_PROMPT });
+      const result = await createModel().doStream({
+        prompt: TEST_PROMPT,
+        tools: toolsFor(testCase),
+      });
       const parts = await convertReadableStreamToArray(result.stream);
       const toolCalls = parts.filter(part => part.type === 'tool-call');
       const finish = parts.find(part => part.type === 'finish');
