@@ -1,8 +1,8 @@
 name: Disable fork PR author assignment
 
 on:
-  pull_request_target:
-    types: [opened]
+  pull_request:
+    types: [opened, synchronize]
 
 permissions:
   contents: read
