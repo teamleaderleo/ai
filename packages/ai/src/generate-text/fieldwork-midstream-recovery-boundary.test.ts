@@ -1,3 +1,4 @@
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { tool } from '@ai-sdk/provider-utils';
 import {
   convertArrayToReadableStream,
@@ -10,7 +11,7 @@ import { streamText } from './stream-text';
 
 const failure = new Error('mid-stream provider failure');
 
-function createModel(parts: Parameters<typeof convertArrayToReadableStream>[0]) {
+function createModel(parts: LanguageModelV4StreamPart[]) {
   const doStream = vi.fn(async () => ({
     stream: convertArrayToReadableStream(parts),
   }));
@@ -60,7 +61,11 @@ describe('Fieldwork #886: mid-stream recovery boundary', () => {
     const parts = await convertAsyncIterableToArray(result.fullStream);
 
     expect(doStream).toHaveBeenCalledTimes(1);
-    expect(parts).toContainEqual({ type: 'text-delta', id: 'text-1', text: 'partial' });
+    expect(parts).toContainEqual({
+      type: 'text-delta',
+      id: 'text-1',
+      text: 'partial',
+    });
     expect(parts).toContainEqual({ type: 'error', error: failure });
     await expect(result.steps).rejects.toThrow('No output generated');
   });
