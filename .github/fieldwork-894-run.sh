@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE=7fc18c3f0c45708eea675be18f7d082741ad5212
+test "$(git rev-parse HEAD)" = "$BASE"
+
+python <<'PY'
+from pathlib import Path
+
+bridge = Path('packages/harness-claude-code/src/bridge/index.ts')
+text = bridge.read_text()
+
+old_type = """  start: StartMessage;\n  inactiveNativeTools: readonly string[];\n  turn: BridgeTurn;\n"""
+new_type = """  start: StartMessage;\n  inactiveNativeTools: readonly string[];\n  externalMcpToolPrefixes: readonly string[];\n  turn: BridgeTurn;\n"""
+assert text.count(old_type) == 1
+text = text.replace(old_type, new_type, 1)
+
+old_prefix = """  const inactiveNativeTools = new Set(input.inactiveNativeTools);\n  const externalMcpToolPrefixes = Object.keys(input.start.mcpServers ?? {}).map(\n    serverName => `mcp__${serverName}__`,\n  );\n"""
+assert text.count(old_prefix) == 1
+text = text.replace(old_prefix, "  const inactiveNativeTools = new Set(input.inactiveNativeTools);\n", 1)
+text = text.replace(
+    "externalMcpToolPrefixes.some(prefix => toolName.startsWith(prefix))",
+    "input.externalMcpToolPrefixes.some(prefix => toolName.startsWith(prefix))",
+    1,
+)
+
+old_kind = """  const kind = NATIVE_TOOL_KINDS[input.nativeName] ?? 'edit';\n  if (input.permissionMode === 'allow-edits') return kind === 'bash';\n"""
+new_kind = """  const kind = NATIVE_TOOL_KINDS[input.nativeName];\n  if (kind == null) return true;\n  if (input.permissionMode === 'allow-edits') return kind === 'bash';\n"""
+assert text.count(old_kind) == 1
+text = text.replace(old_kind, new_kind, 1)
+
+old_prep = """  const inactiveNativeTools = resolveInactiveNativeTools(\n    start.builtinToolFiltering,\n  );\n  const permissionOptions = createPermissionOptions({\n    start,\n    inactiveNativeTools,\n    turn,\n"""
+new_prep = """  const inactiveNativeTools = resolveInactiveNativeTools(\n    start.builtinToolFiltering,\n  );\n  const externalMcpToolPrefixes = Object.keys(start.mcpServers ?? {}).map(\n    serverName => `mcp__${serverName}__`,\n  );\n  const permissionOptions = createPermissionOptions({\n    start,\n    inactiveNativeTools,\n    externalMcpToolPrefixes,\n    turn,\n"""
+assert text.count(old_prep) == 1
+text = text.replace(old_prep, new_prep, 1)
+
+old_hooks = """      hooks: {\n        PostCompact: [\n"""
+new_hooks = """      hooks: {\n        PreToolUse: [\n          {\n            hooks: [\n              async (input: { tool_name?: unknown }) => {\n                if ((start.permissionMode ?? 'allow-all') === 'allow-all') {\n                  return {};\n                }\n                const toolName = input?.tool_name;\n                if (\n                  typeof toolName !== 'string' ||\n                  NATIVE_TOOL_KINDS[toolName] != null ||\n                  toolName.startsWith('mcp__harness-tools__') ||\n                  externalMcpToolPrefixes.some(prefix =>\n                    toolName.startsWith(prefix),\n                  )\n                ) {\n                  return {};\n                }\n                return {\n                  hookSpecificOutput: {\n                    hookEventName: 'PreToolUse',\n                    permissionDecision: 'ask',\n                    permissionDecisionReason:\n                      'Unknown Claude native tool requires host approval.',\n                  },\n                };\n              },\n            ],\n          },\n        ],\n        PostCompact: [\n"""
+assert text.count(old_hooks) == 1
+text = text.replace(old_hooks, new_hooks, 1)
+bridge.write_text(text)
+
+Path('packages/harness-claude-code/src/unknown-native-permission-boundary.test.ts').write_text(r'''import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
+type QueryArgs = { options: Record<string, unknown> };
+type CanUseTool = (
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  options: { toolUseID: string },
+) => Promise<{ behavior: string }>;
+type PreToolUseHook = (
+  input: {
+    hook_event_name: 'PreToolUse';
+    tool_name: string;
+    tool_input: unknown;
+    tool_use_id: string;
+  },
+) => Promise<Record<string, unknown>>;
+
+const state = vi.hoisted(() => ({
+  queryArgs: [] as QueryArgs[],
+  approvalRequests: [] as string[],
+  start: {} as Record<string, unknown>,
+  originalArgv: [] as string[],
+}));
+
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: (args: QueryArgs) => {
+    state.queryArgs.push(args);
+    return (async function* () {
+      yield { type: 'result', subtype: 'success', result: 'done' };
+    })();
+  },
+}));
+
+vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({ McpServer: class {} }));
+
+vi.mock('@ai-sdk/harness/bridge', () => ({
+  runBridge: async ({
+    onStart,
+  }: {
+    onStart: (start: unknown, turn: unknown) => Promise<void>;
+  }) => {
+    await onStart(state.start, {
+      abortSignal: new AbortController().signal,
+      pendingUserMessages: [],
+      firstTurn: true,
+      emit: () => {},
+      emitWarning: () => {},
+      emitError: () => {},
+      requestToolResult: async () => ({ output: {} }),
+      requestToolApproval: async (approvalId: string) => {
+        state.approvalRequests.push(approvalId);
+        return { approved: false, reason: 'test-denied' };
+      },
+    });
+  },
+}));
+
+async function loadOptions(
+  permissionMode: 'allow-reads' | 'allow-edits' | 'allow-all',
+) {
+  state.start = {
+    prompt: 'Inspect the project.',
+    thinking: { type: 'disabled' },
+    permissionMode,
+    mcpServers: {
+      context7: { type: 'http', url: 'https://example.invalid/mcp' },
+    },
+  };
+  await import('./bridge/index');
+  const options = state.queryArgs[0]?.options;
+  expect(options).toBeDefined();
+  return options!;
+}
+
+function getPreToolUseHook(options: Record<string, unknown>): PreToolUseHook {
+  const hooks = options.hooks as {
+    PreToolUse?: Array<{ hooks?: PreToolUseHook[] }>;
+  };
+  const hook = hooks.PreToolUse?.[0]?.hooks?.[0];
+  expect(hook).toBeDefined();
+  return hook!;
+}
+
+async function hookDecision(hook: PreToolUseHook, toolName: string) {
+  return hook({
+    hook_event_name: 'PreToolUse',
+    tool_name: toolName,
+    tool_input: {},
+    tool_use_id: `hook:${toolName}`,
+  });
+}
+
+describe('Claude unknown native permission boundary', () => {
+  beforeEach(() => {
+    state.queryArgs = [];
+    state.approvalRequests = [];
+    state.originalArgv = [...process.argv];
+    process.argv.splice(
+      0,
+      process.argv.length,
+      'node',
+      'bridge.mjs',
+      '--workdir',
+      '/tmp/harness-claude-code-test/work',
+      '--bridge-state-dir',
+      '/tmp/harness-claude-code-test/state',
+    );
+  });
+
+  afterEach(() => {
+    process.argv.splice(0, process.argv.length, ...state.originalArgv);
+    vi.resetModules();
+  });
+
+  test.each(['allow-reads', 'allow-edits'] as const)(
+    'unknown native tools force an ask and enter host approval under %s',
+    async permissionMode => {
+      const options = await loadOptions(permissionMode);
+      const hook = getPreToolUseHook(options);
+      await expect(
+        hookDecision(hook, 'FutureNativeProcessTool'),
+      ).resolves.toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'ask',
+          permissionDecisionReason:
+            'Unknown Claude native tool requires host approval.',
+        },
+      });
+
+      const canUseTool = options.canUseTool as CanUseTool;
+      const id = `unknown:${permissionMode}`;
+      await expect(
+        canUseTool(
+          'FutureNativeProcessTool',
+          { command: 'synthetic' },
+          { toolUseID: id },
+        ),
+      ).resolves.toMatchObject({ behavior: 'deny' });
+      expect(state.approvalRequests).toContain(id);
+    },
+  );
+
+  test('known native tools do not acquire a new PreToolUse ask', async () => {
+    const options = await loadOptions('allow-edits');
+    const hook = getPreToolUseHook(options);
+    for (const toolName of ['Read', 'Write', 'Bash', 'Agent']) {
+      await expect(hookDecision(hook, toolName)).resolves.toEqual({});
+    }
+  });
+
+  test('configured external and reserved internal MCP names bypass unknown-native forcing', async () => {
+    const options = await loadOptions('allow-edits');
+    const hook = getPreToolUseHook(options);
+    const canUseTool = options.canUseTool as CanUseTool;
+
+    for (const toolName of [
+      'mcp__context7__resolve-library-id',
+      'mcp__harness-tools__hostTool',
+    ]) {
+      await expect(hookDecision(hook, toolName)).resolves.toEqual({});
+      await expect(
+        canUseTool(toolName, {}, { toolUseID: toolName }),
+      ).resolves.toMatchObject({ behavior: 'allow' });
+      expect(state.approvalRequests).not.toContain(toolName);
+    }
+  });
+
+  test('unconfigured mcp-like names are unknown and remain approval-gated', async () => {
+    const options = await loadOptions('allow-edits');
+    const hook = getPreToolUseHook(options);
+    const toolName = 'mcp__not-configured__dangerous';
+    await expect(hookDecision(hook, toolName)).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'ask' },
+    });
+    const canUseTool = options.canUseTool as CanUseTool;
+    await expect(
+      canUseTool(toolName, {}, { toolUseID: 'unconfigured' }),
+    ).resolves.toMatchObject({ behavior: 'deny' });
+    expect(state.approvalRequests).toContain('unconfigured');
+  });
+
+  test('allow-all retains bypass behavior and does not force unknown asks', async () => {
+    const options = await loadOptions('allow-all');
+    const hook = getPreToolUseHook(options);
+    await expect(
+      hookDecision(hook, 'FutureNativeProcessTool'),
+    ).resolves.toEqual({});
+    expect(options.permissionMode).toBe('bypassPermissions');
+    expect(options.allowDangerouslySkipPermissions).toBe(true);
+    expect(options.canUseTool).toBeUndefined();
+  });
+});
+''')
+
+Path('.changeset/claude-unknown-native-approval.md').write_text("""---
+'@ai-sdk/harness-claude-code': patch
+---
+
+Require host approval for unknown Claude native tools in restricted permission modes, while preserving configured MCP and known built-in behavior.
+""")
+PY
+
+git config user.name 'Fieldwork Repair'
+git config user.email 'fieldwork-repair@users.noreply.github.com'
+git add .changeset/claude-unknown-native-approval.md \
+  packages/harness-claude-code/src/bridge/index.ts \
+  packages/harness-claude-code/src/unknown-native-permission-boundary.test.ts
+git commit -m 'fix(harness-claude-code): fail closed on unknown native tools'
+test "$(git rev-parse HEAD^)" = "$BASE"
+
+git diff --check "$BASE"...HEAD
+git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+printf '%s\n' \
+  .changeset/claude-unknown-native-approval.md \
+  packages/harness-claude-code/src/bridge/index.ts \
+  packages/harness-claude-code/src/unknown-native-permission-boundary.test.ts \
+  | sort > /tmp/expected
+diff -u /tmp/expected /tmp/actual
+
+pnpm install --frozen-lockfile
+pnpm konsistent
+pnpm -C packages/harness-claude-code type-check
+pnpm -C packages/harness-claude-code build
+pnpm -C packages/harness-claude-code exec vitest --config vitest.node.config.js --run \
+  src/native-tool-kind-parity.test.ts \
+  src/external-mcp-permission-boundary.test.ts \
+  src/unknown-native-permission-boundary.test.ts
+pnpm -C packages/harness-claude-code test:node
+
+node -e "const p=require('./packages/harness-claude-code/src/bridge/package.json'); if (p.dependencies['@anthropic-ai/claude-agent-sdk'] !== '0.3.213' || p.dependencies['@anthropic-ai/claude-code'] !== '2.1.213') process.exit(1)"
+
+git push origin HEAD:refs/heads/candidate/claude-unknown-native-approval-844
