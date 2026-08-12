@@ -1,0 +1,63 @@
+name: Fieldwork TogetherAI flat cache usage
+
+on:
+  pull_request:
+    branches:
+      - execution-base/togetherai-flat-cache
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Verify source and carrier fences
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLIC_BASE=8e9028317de6a72973971356283271aff44bba74
+          CANDIDATE=753e7082e77779dee855ea8e83e13c592c7d3ac8
+
+          test "$(git rev-parse "$CANDIDATE"^)" = "$PUBLIC_BASE"
+          test "$(git rev-parse HEAD^^)" = "$CANDIDATE"
+
+          git diff --check "$PUBLIC_BASE"..."$CANDIDATE"
+          git diff --name-only "$PUBLIC_BASE"..."$CANDIDATE" | sort > /tmp/candidate-actual
+          printf '%s\n' \
+            .changeset/together-cached-usage.md \
+            packages/togetherai/src/convert-togetherai-chat-usage.test.ts \
+            packages/togetherai/src/convert-togetherai-chat-usage.ts \
+            packages/togetherai/src/togetherai-provider.ts \
+            | sort > /tmp/candidate-expected
+          diff -u /tmp/candidate-expected /tmp/candidate-actual
+
+          git diff --check "$CANDIDATE"...HEAD^
+          git diff --name-only "$CANDIDATE"...HEAD^ | sort > /tmp/base-carrier-actual
+          printf '%s\n' .github/workflows/fieldwork-togetherai-flat-cache.yml | sort > /tmp/base-carrier-expected
+          diff -u /tmp/base-carrier-expected /tmp/base-carrier-actual
+
+          git diff --check HEAD^...HEAD
+          git diff --name-only HEAD^...HEAD | sort > /tmp/head-carrier-actual
+          printf '%s\n' packages/togetherai/src/togetherai-flat-cached-usage.fieldwork.test.ts | sort > /tmp/head-carrier-expected
+          diff -u /tmp/head-carrier-expected /tmp/head-carrier-actual
+      - run: pnpm install --frozen-lockfile
+      - name: Repository code consistency
+        run: pnpm konsistent
+      - name: TogetherAI type check
+        run: pnpm -C packages/togetherai type-check
+      - name: TogetherAI Node tests
+        run: pnpm -C packages/togetherai test:node
+      - name: TogetherAI Edge tests
+        run: pnpm -C packages/togetherai test:edge
+      - name: Build TogetherAI package
+        run: pnpm -C packages/togetherai build
