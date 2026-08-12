@@ -1,0 +1,197 @@
+name: Validate Responses programmatic caller compatibility
+
+on:
+  push:
+    branches:
+      - repair/responses-client-completion-clean-8e902831
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply caller-aware function completion gate
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              p.write_text(text.replace(old, new, 1))
+
+          model = 'packages/openai/src/responses/openai-responses-language-model.ts'
+          replace_once(
+              model,
+              """        case 'function_call': {\n          if (part.status !== 'completed') {\n            break;\n          }""",
+              """        case 'function_call': {\n          if (\n            part.status !== 'completed' &&\n            part.caller?.type !== 'program'\n          ) {\n            break;\n          }""",
+          )
+          replace_once(
+              model,
+              """                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                hasFunctionCall = true;\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName: value.item.name,""",
+              """                if (\n                  value.item.status !== 'completed' &&\n                  value.item.caller?.type !== 'program'\n                ) {\n                  return;\n                }\n\n                hasFunctionCall = true;\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName: value.item.name,""",
+          )
+
+          test = 'packages/openai/src/responses/openai-responses-completion-status.test.ts'
+          marker = """  for (const testCase of ['shell', 'toolSearch'] as const) {"""
+          insertion = r'''  it('doGenerate preserves in-progress program-issued function calls', async () => {
+    const item = {
+      id: 'fc_program',
+      type: 'function_call' as const,
+      call_id: 'call_program_tool',
+      name: 'getInventory',
+      arguments: '{"sku":"sku_123"}',
+      status: 'in_progress' as const,
+      caller: { type: 'program' as const, caller_id: 'call_program' },
+    };
+
+    server.urls[URL].response = {
+      type: 'json-value',
+      body: {
+        ...responseBody({ kind: 'function', status: 'completed' }),
+        id: 'resp_programmatic_function',
+        output: [item],
+      },
+    };
+
+    const result = await createModel().doGenerate({ prompt: TEST_PROMPT });
+    const toolCalls = result.content.filter(part => part.type === 'tool-call');
+
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      toolCallId: 'call_program_tool',
+      toolName: 'getInventory',
+      providerMetadata: {
+        openai: {
+          itemId: 'fc_program',
+          caller: { type: 'program', callerId: 'call_program' },
+        },
+      },
+    });
+  });
+
+  it('doStream preserves in-progress program-issued function calls', async () => {
+    const addedItem = {
+      id: 'fc_program_stream',
+      type: 'function_call' as const,
+      call_id: 'call_program_tool_stream',
+      name: 'getInventory',
+      arguments: '',
+      status: 'in_progress' as const,
+      caller: { type: 'program' as const, caller_id: 'call_program_stream' },
+    };
+    const doneItem = {
+      ...addedItem,
+      arguments: '{"sku":"sku_123"}',
+    };
+
+    server.urls[URL].response = {
+      type: 'stream-chunks',
+      chunks: [
+        `data: ${JSON.stringify({
+          type: 'response.created',
+          response: {
+            id: 'resp_programmatic_stream',
+            created_at: 1741257730,
+            model: 'gpt-5.6-sol',
+            service_tier: null,
+          },
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: addedItem,
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          type: 'response.function_call_arguments.delta',
+          item_id: addedItem.id,
+          output_index: 0,
+          delta: '{"sku":"sku_123"}',
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          type: 'response.function_call_arguments.done',
+          item_id: addedItem.id,
+          output_index: 0,
+          arguments: '{"sku":"sku_123"}',
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: doneItem,
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            incomplete_details: null,
+            usage: {
+              input_tokens: 1,
+              input_tokens_details: { cached_tokens: 0 },
+              output_tokens: 1,
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+            reasoning: null,
+            service_tier: null,
+          },
+        })}\n\n`,
+        'data: [DONE]\n\n',
+      ],
+    };
+
+    const result = await createModel().doStream({ prompt: TEST_PROMPT });
+    const parts = await convertReadableStreamToArray(result.stream);
+    const toolCalls = parts.filter(part => part.type === 'tool-call');
+
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      toolCallId: 'call_program_tool_stream',
+      toolName: 'getInventory',
+      providerMetadata: {
+        openai: {
+          itemId: 'fc_program_stream',
+          caller: { type: 'program', callerId: 'call_program_stream' },
+        },
+      },
+    });
+  });
+
+'''
+          replace_once(test, marker, insertion + marker)
+          PY
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build affected packages and dependencies
+        run: pnpm turbo build --filter=@ai-sdk/openai... --filter=@ai-sdk/open-responses...
+      - name: Run Open Responses regressions
+        run: pnpm -C packages/open-responses exec vitest --config vitest.node.config.js --run src/responses/open-responses-completion-status.test.ts
+      - name: Run native OpenAI regressions
+        run: pnpm -C packages/openai exec vitest --config vitest.node.config.js --run src/responses/openai-responses-completion-status.test.ts
+      - name: Type-check affected packages
+        run: |
+          pnpm -C packages/open-responses type-check
+          pnpm -C packages/openai type-check
+      - name: Commit caller-aware refinement and remove carrier
+        shell: bash
+        run: |
+          rm .github/workflows/fieldwork-responses-programmatic-compat.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/openai/src/responses/openai-responses-language-model.ts \
+                  packages/openai/src/responses/openai-responses-completion-status.test.ts \
+                  .github/workflows/fieldwork-responses-programmatic-compat.yml
+          git commit --no-verify -m "Preserve program-issued Responses function calls"
+          git push origin HEAD:repair/responses-client-completion-clean-8e902831
