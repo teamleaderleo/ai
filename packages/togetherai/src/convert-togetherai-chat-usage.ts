@@ -25,7 +25,7 @@ export function convertTogetherAIChatUsage(
   const promptTokens = usage.prompt_tokens ?? 0;
   const completionTokens = usage.completion_tokens ?? 0;
   const cacheReadTokens =
-    usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0;
+    usage.prompt_tokens_details?.cached_tokens || usage.cached_tokens || 0;
   const reasoningTokens =
     usage.completion_tokens_details?.reasoning_tokens ?? 0;
 
