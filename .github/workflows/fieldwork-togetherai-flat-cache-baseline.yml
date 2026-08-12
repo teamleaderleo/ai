@@ -1,0 +1,44 @@
+name: Fieldwork TogetherAI flat cache baseline v2
+
+on:
+  pull_request:
+    branches:
+      - execution-base/togetherai-flat-cache-baseline-v2
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Verify baseline carrier fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLIC_BASE=8e9028317de6a72973971356283271aff44bba74
+          test "$(git rev-parse HEAD^^)" = "$PUBLIC_BASE"
+
+          git diff --check "$PUBLIC_BASE"...HEAD^
+          git diff --name-only "$PUBLIC_BASE"...HEAD^ | sort > /tmp/base-carrier-actual
+          printf '%s\n' .github/workflows/fieldwork-togetherai-flat-cache-baseline.yml | sort > /tmp/base-carrier-expected
+          diff -u /tmp/base-carrier-expected /tmp/base-carrier-actual
+
+          git diff --check HEAD^...HEAD
+          git diff --name-only HEAD^...HEAD | sort > /tmp/head-carrier-actual
+          printf '%s\n' packages/togetherai/src/togetherai-flat-cached-usage.fieldwork.test.ts | sort > /tmp/head-carrier-expected
+          diff -u /tmp/head-carrier-expected /tmp/head-carrier-actual
+      - run: pnpm install --frozen-lockfile
+      - name: Build package artifacts
+        run: pnpm run build:packages
+      - name: Run flat-cache discriminator
+        run: pnpm -C packages/togetherai exec vitest --config vitest.node.config.js --run src/togetherai-flat-cached-usage.fieldwork.test.ts
