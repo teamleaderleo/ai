@@ -1,0 +1,41 @@
+name: Fieldwork Google Chirp routing
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/839-provider-tool-probes
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fieldwork/839-provider-tool-probes
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Capture exact source head
+        run: |
+          source_head="$(git rev-parse HEAD)"
+          echo "SOURCE_HEAD=$source_head" >> "$GITHUB_ENV"
+          echo "source head: $source_head"
+      - run: pnpm install --frozen-lockfile
+      - name: Google Vertex type check
+        run: pnpm -C packages/google-vertex type-check
+      - name: Google Vertex Node tests
+        run: pnpm -C packages/google-vertex test:node
+      - name: Google Vertex Edge tests
+        run: pnpm -C packages/google-vertex test:edge
+      - name: Final exact-head fence
+        run: |
+          echo "validated source head: $SOURCE_HEAD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
