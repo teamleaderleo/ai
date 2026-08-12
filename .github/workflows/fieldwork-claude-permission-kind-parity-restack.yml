@@ -1,0 +1,56 @@
+name: Fieldwork Claude permission parity restack
+
+on:
+  pull_request:
+    branches:
+      - candidate/claude-permission-kind-parity-current-8e90
+
+permissions:
+  contents: write
+
+jobs:
+  restack:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/claude-permission-kind-parity-current-8e90
+          fetch-depth: 0
+      - name: Apply exact repaired delta onto current public main
+        shell: bash
+        run: |
+          set -euo pipefail
+          old_base=7d40fafc394a2c9033f931eb85c895e3817f4b58
+          repaired=79c009fc469eac4e9ceea859c5a0ea7d83799a76
+          git fetch --no-tags origin "$old_base" "$repaired"
+          git diff --binary "$old_base" "$repaired" -- \
+            .changeset/claude-permission-kind-parity.md \
+            packages/harness-claude-code/src/bridge/index.ts \
+            packages/harness-claude-code/src/bridge/native-tool-kind-parity.test.ts \
+            packages/harness-claude-code/src/claude-code-harness.ts \
+            packages/harness-claude-code/src/native-tool-kinds.ts \
+            > /tmp/claude-permission-parity.patch
+          git apply --3way /tmp/claude-permission-parity.patch
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            '.changeset/claude-permission-kind-parity.md' \
+            'packages/harness-claude-code/src/bridge/index.ts' \
+            'packages/harness-claude-code/src/bridge/native-tool-kind-parity.test.ts' \
+            'packages/harness-claude-code/src/claude-code-harness.ts' \
+            'packages/harness-claude-code/src/native-tool-kinds.ts' | sort)"
+          test "$actual" = "$expected"
+      - name: Commit current-main replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Fieldwork Restack'
+          git config user.email 'fieldwork-restack@users.noreply.github.com'
+          git add \
+            .changeset/claude-permission-kind-parity.md \
+            packages/harness-claude-code/src/bridge/index.ts \
+            packages/harness-claude-code/src/bridge/native-tool-kind-parity.test.ts \
+            packages/harness-claude-code/src/claude-code-harness.ts \
+            packages/harness-claude-code/src/native-tool-kinds.ts
+          git commit -m 'Restack Claude permission parity repair on current main'
+          git push origin HEAD:candidate/claude-permission-kind-parity-current-8e90
