@@ -738,6 +738,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
           const toolCallId = part.call_id ?? part.id;
           const isHosted = part.execution === 'server';
 
+          if (!isHosted && part.status !== 'completed') {
+            break;
+          }
+
           if (isHosted) {
             hostedToolSearchCallIds.push(toolCallId);
           }
@@ -783,6 +787,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
         }
 
         case 'local_shell_call': {
+          if (part.status !== 'completed') {
+            break;
+          }
+
           content.push({
             type: 'tool-call',
             toolCallId: part.call_id,
@@ -801,6 +809,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
         }
 
         case 'shell_call': {
+          if (!isShellProviderExecuted && part.status !== 'completed') {
+            break;
+          }
+
           content.push({
             type: 'tool-call',
             toolCallId: part.call_id,
@@ -942,6 +954,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
         }
 
         case 'function_call': {
+          if (part.status !== 'completed') {
+            break;
+          }
+
           hasFunctionCall = true;
 
           content.push({
@@ -1010,6 +1026,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
         }
 
         case 'custom_tool_call': {
+          if (part.status !== 'completed') {
+            break;
+          }
+
           hasFunctionCall = true;
           const toolName = toolNameMapping.toCustomToolName(part.name);
 
@@ -1210,6 +1230,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
         }
 
         case 'apply_patch_call': {
+          if (part.status !== 'completed') {
+            break;
+          }
+
           content.push({
             type: 'tool-call',
             toolCallId: part.call_id,
@@ -1691,7 +1715,6 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
                 activeOutputItemIds[value.output_index] = undefined;
               } else if (value.item.type === 'function_call') {
                 ongoingToolCalls[value.output_index] = undefined;
-                hasFunctionCall = true;
 
                 controller.enqueue({
                   type: 'tool-input-end',
@@ -1704,6 +1727,12 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
                     },
                   }),
                 });
+
+                if (value.item.status !== 'completed') {
+                  return;
+                }
+
+                hasFunctionCall = true;
 
                 controller.enqueue({
                   type: 'tool-call',
@@ -1769,7 +1798,6 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
                 });
               } else if (value.item.type === 'custom_tool_call') {
                 ongoingToolCalls[value.output_index] = undefined;
-                hasFunctionCall = true;
                 const toolName = toolNameMapping.toCustomToolName(
                   value.item.name,
                 );
@@ -1778,6 +1806,12 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
                   type: 'tool-input-end',
                   id: value.item.call_id,
                 });
+
+                if (value.item.status !== 'completed') {
+                  return;
+                }
+
+                hasFunctionCall = true;
 
                 controller.enqueue({
                   type: 'tool-call',
@@ -1918,6 +1952,11 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
                     type: 'tool-input-end',
                     id: toolCallId,
                   });
+
+                  if (!isHosted && value.item.status !== 'completed') {
+                    ongoingToolCalls[value.output_index] = undefined;
+                    return;
+                  }
 
                   controller.enqueue({
                     type: 'tool-call',
@@ -2092,6 +2131,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
               } else if (value.item.type === 'local_shell_call') {
                 ongoingToolCalls[value.output_index] = undefined;
 
+                if (value.item.status !== 'completed') {
+                  return;
+                }
+
                 controller.enqueue({
                   type: 'tool-call',
                   toolCallId: value.item.call_id,
@@ -2112,6 +2155,13 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV4 {
                 });
               } else if (value.item.type === 'shell_call') {
                 ongoingToolCalls[value.output_index] = undefined;
+
+                if (
+                  !isShellProviderExecuted &&
+                  value.item.status !== 'completed'
+                ) {
+                  return;
+                }
 
                 controller.enqueue({
                   type: 'tool-call',

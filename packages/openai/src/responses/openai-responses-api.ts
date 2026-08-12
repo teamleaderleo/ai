@@ -988,7 +988,7 @@ export const openaiResponsesChunkSchema = lazySchema(() =>
             call_id: z.string(),
             name: z.string(),
             input: z.string(),
-            status: z.literal('completed'),
+            status: z.enum(['in_progress', 'completed', 'incomplete']),
           }),
           z.object({
             type: z.literal('code_interpreter_call'),
@@ -1063,6 +1063,7 @@ export const openaiResponsesChunkSchema = lazySchema(() =>
             type: z.literal('local_shell_call'),
             id: z.string(),
             call_id: z.string(),
+            status: z.enum(['in_progress', 'completed', 'incomplete']),
             action: z.object({
               type: z.literal('exec'),
               command: z.array(z.string()),
@@ -1474,6 +1475,7 @@ export const openaiResponsesResponseSchema = lazySchema(() =>
               type: z.literal('local_shell_call'),
               id: z.string(),
               call_id: z.string(),
+              status: z.enum(['in_progress', 'completed', 'incomplete']),
               action: z.object({
                 type: z.literal('exec'),
                 command: z.array(z.string()),
@@ -1489,6 +1491,7 @@ export const openaiResponsesResponseSchema = lazySchema(() =>
               name: z.string(),
               arguments: z.string(),
               id: z.string(),
+              status: z.enum(['in_progress', 'completed', 'incomplete']),
               namespace: z.string().nullish(),
               caller: openaiResponsesToolCallerSchema.nullish(),
             }),
@@ -1500,6 +1503,7 @@ export const openaiResponsesResponseSchema = lazySchema(() =>
               name: z.string(),
               input: z.string(),
               id: z.string(),
+              status: z.enum(['in_progress', 'completed', 'incomplete']),
             }),
             openaiResponsesComputerCallSchema,
             z.object({
