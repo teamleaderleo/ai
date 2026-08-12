@@ -1,0 +1,24 @@
+name: Keep fork PR authors unassigned
+
+on:
+  pull_request_target:
+    types: [assigned]
+
+permissions:
+  contents: read
+
+jobs:
+  unassign-author:
+    if: >-
+      github.repository == 'teamleaderleo/ai' &&
+      github.event.assignee.login == github.event.pull_request.user.login
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove PR author assignment
+        run: gh pr edit "$PULL_REQUEST_URL" --remove-assignee "$AUTHOR_LOGIN"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
