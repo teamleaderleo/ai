@@ -32,13 +32,13 @@ describe('downloadBlob error cleanup liveness', () => {
     mockedFetchWithValidatedRedirects.mockResolvedValue(response);
     mockedCancelResponseBody.mockReturnValue(pendingCleanup);
 
-    await expect(downloadBlob('https://example.test/file')).rejects.toMatchObject(
-      {
-        name: 'AI_DownloadError',
-        statusCode: 500,
-        statusText: 'Internal Server Error',
-      },
-    );
+    await expect(
+      downloadBlob('https://example.test/file'),
+    ).rejects.toMatchObject({
+      name: 'AI_DownloadError',
+      statusCode: 500,
+      statusText: 'Internal Server Error',
+    });
 
     expect(mockedCancelResponseBody).toHaveBeenCalledOnce();
     expect(mockedCancelResponseBody).toHaveBeenCalledWith(response);
