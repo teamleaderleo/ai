@@ -18,6 +18,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build:packages
-      - run: pnpm -C examples/ai-functions exec tsx src/reproduction/fieldwork-native-openai-incomplete-tool-search.ts
+      - run: pnpm install --frozen-lockfile >/dev/null
+      - run: pnpm build:packages >/dev/null
+      - name: Capture receipt
+        run: pnpm -C examples/ai-functions exec tsx src/reproduction/fieldwork-native-openai-incomplete-tool-search.ts > tool-search-status-receipt.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tool-search-status-receipt
+          path: tool-search-status-receipt.json
