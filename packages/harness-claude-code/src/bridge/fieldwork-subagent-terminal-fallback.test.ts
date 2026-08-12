@@ -5,36 +5,33 @@ import {
 } from './create-emit-stream-event';
 
 describe('Fieldwork #866: Claude subagent terminal fallback', () => {
-  it(
-    'keeps a filtered subagent assistant error out of parent terminal fallback state',
-    () => {
-      const state = createClaudeStreamEventState();
-      const emitted: Record<string, unknown>[] = [];
-      const terminalErrors: Array<string | undefined> = [];
+  it('keeps a filtered subagent assistant error out of parent terminal fallback state', () => {
+    const state = createClaudeStreamEventState();
+    const emitted: Record<string, unknown>[] = [];
+    const terminalErrors: Array<string | undefined> = [];
 
-      const emitStreamEvent = createEmitStreamEvent({
-        state,
-        emit: event => emitted.push(event),
-        emitWarning: () => {},
-        emitTerminalError: error => terminalErrors.push(error),
-        onCompactionBoundary: () => {},
-        toCommonName: name => name,
-      });
+    const emitStreamEvent = createEmitStreamEvent({
+      state,
+      emit: event => emitted.push(event),
+      emitWarning: () => {},
+      emitTerminalError: error => terminalErrors.push(error),
+      onCompactionBoundary: () => {},
+      toCommonName: name => name,
+    });
 
-      emitStreamEvent({
-        type: 'assistant',
-        parent_tool_use_id: 'toolu_parent',
-        error: 'server_error',
-        message: {
-          content: [{ type: 'text', text: 'subagent failed' }],
-        },
-      });
+    emitStreamEvent({
+      type: 'assistant',
+      parent_tool_use_id: 'toolu_parent',
+      error: 'server_error',
+      message: {
+        content: [{ type: 'text', text: 'subagent failed' }],
+      },
+    });
 
-      expect(emitted).toEqual([{ type: 'stream-start' }]);
-      expect(terminalErrors).toEqual([]);
-      expect(state.observedTerminalError).toBeUndefined();
-    },
-  );
+    expect(emitted).toEqual([{ type: 'stream-start' }]);
+    expect(terminalErrors).toEqual([]);
+    expect(state.observedTerminalError).toBeUndefined();
+  });
 
   it('still records a main-agent assistant error in terminal fallback state', () => {
     const state = createClaudeStreamEventState();
