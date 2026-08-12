@@ -1,0 +1,26 @@
+name: Fieldwork 894 simple runner
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Execute exact repair harness
+        shell: bash
+        run: |
+          cp .github/fieldwork-894-run.sh /tmp/fieldwork-894-run.sh
+          git reset --hard 7fc18c3f0c45708eea675be18f7d082741ad5212
+          bash /tmp/fieldwork-894-run.sh
