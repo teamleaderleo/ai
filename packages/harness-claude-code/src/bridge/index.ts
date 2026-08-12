@@ -11,6 +11,7 @@ import {
 } from '@ai-sdk/harness/bridge';
 import { createCompactionLatch } from './compaction-latch';
 import type { StartMessage } from '../claude-code-bridge-protocol';
+import { CLAUDE_CODE_NATIVE_TOOL_KINDS as NATIVE_TOOL_KINDS } from '../native-tool-kinds';
 import { randomUUID } from 'node:crypto';
 import { argv, env as procEnv, stdout } from 'node:process';
 
@@ -72,36 +73,6 @@ const NATIVE_TO_COMMON: Readonly<Record<string, CommonBuiltinToolName>> = {
   Glob: 'glob',
   Grep: 'grep',
   WebSearch: 'webSearch',
-};
-
-const NATIVE_TOOL_KINDS: Readonly<
-  Record<string, 'readonly' | 'edit' | 'bash'>
-> = {
-  Read: 'readonly',
-  Glob: 'readonly',
-  Grep: 'readonly',
-  WebSearch: 'readonly',
-  WebFetch: 'readonly',
-  TaskGet: 'readonly',
-  TaskList: 'readonly',
-  TaskOutput: 'readonly',
-  ListMcpResources: 'readonly',
-  ReadMcpResource: 'readonly',
-  Write: 'edit',
-  Edit: 'edit',
-  NotebookEdit: 'edit',
-  TodoWrite: 'edit',
-  TaskCreate: 'edit',
-  TaskUpdate: 'edit',
-  TaskStop: 'edit',
-  EnterWorktree: 'edit',
-  ExitWorktree: 'edit',
-  ExitPlanMode: 'edit',
-  Skill: 'readonly',
-  AskUserQuestion: 'readonly',
-  ToolSearch: 'readonly',
-  Bash: 'bash',
-  Monitor: 'bash',
 };
 
 function toCommonName(nativeName: string): CommonBuiltinToolName | string {
