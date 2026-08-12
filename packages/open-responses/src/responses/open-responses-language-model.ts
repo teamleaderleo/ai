@@ -284,6 +284,10 @@ export class OpenResponsesLanguageModel implements LanguageModelV4 {
         }
 
         case 'function_call': {
+          if (part.status !== 'completed') {
+            break;
+          }
+
           hasToolCalls = true;
           content.push({
             type: 'tool-call',
@@ -482,6 +486,11 @@ export class OpenResponsesLanguageModel implements LanguageModelV4 {
               const toolName = toolCall?.toolName ?? chunk.item.name;
               const toolCallId = toolCall?.toolCallId ?? chunk.item.call_id;
               const input = toolCall?.arguments ?? chunk.item.arguments ?? '';
+
+              if (chunk.item.status !== 'completed') {
+                toolCallsByItemId.delete(chunk.item.id);
+                return;
+              }
 
               controller.enqueue({
                 type: 'tool-call',
