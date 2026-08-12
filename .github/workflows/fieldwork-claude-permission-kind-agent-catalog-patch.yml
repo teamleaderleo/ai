@@ -1,0 +1,52 @@
+name: Fieldwork Claude Agent catalog patch
+
+on:
+  pull_request:
+    branches:
+      - candidate/claude-permission-kind-parity-7d40
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: candidate/claude-permission-kind-parity-7d40
+          fetch-depth: 0
+      - name: Add explicit Agent public permission kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/harness-claude-code/src/claude-code-harness.ts')
+          text = path.read_text()
+          start_marker = '  Agent: tool({'
+          end_marker = '\n  TaskCreate: tool({'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          block = text[start:end]
+          lines = block.splitlines()
+          assert lines[0] == start_marker
+          assert lines[-1] == '  }),' 
+          replacement = ['  Agent: {', '    ...tool({']
+          replacement.extend('  ' + line for line in lines[1:-1])
+          replacement.extend(["    }),", "    toolUseKind: 'bash',", '  },'])
+          text = text[:start] + '\n'.join(replacement) + text[end:]
+          path.write_text(text)
+          PY
+          git diff --check
+          git diff -- packages/harness-claude-code/src/claude-code-harness.ts
+      - name: Commit repaired public declaration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Fieldwork Repair'
+          git config user.email 'fieldwork-repair@users.noreply.github.com'
+          git add packages/harness-claude-code/src/claude-code-harness.ts
+          git commit -m 'Classify Claude Agent permission kind explicitly'
+          git push origin HEAD:candidate/claude-permission-kind-parity-7d40
