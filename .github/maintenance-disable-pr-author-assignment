@@ -1,1 +1,2 @@
 one-time maintenance trigger for disabling inherited PR author assignment in this fork
+retrigger after switching the trusted job to pull_request synchronize
