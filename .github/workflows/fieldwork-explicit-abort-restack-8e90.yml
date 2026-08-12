@@ -1,0 +1,176 @@
+name: Fieldwork explicit abort current-main restack
+
+on:
+  push:
+    branches:
+      - carrier/explicit-abort-restack-8e90
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  OLD_BASE: e685a4c92a5869aec306718ab5a440b7cb4fa5b1
+  OLD_HEAD: 4dcdab6011703dcf98bc0f655815ff678e031896
+  CURRENT_BASE: 8e9028317de6a72973971356283271aff44bba74
+  TARGET_BRANCH: candidate/explicit-abort-terminal-settlement-8e90
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 26]
+    steps:
+      - name: Check out current-main base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CURRENT_BASE }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch immutable old repair inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin \
+            refs/heads/fieldwork/explicit-abort-terminal-settlement:refs/remotes/origin/fieldwork/explicit-abort-terminal-settlement \
+            refs/heads/fieldwork/explicit-abort-terminal-settlement-repair:refs/remotes/origin/fieldwork/explicit-abort-terminal-settlement-repair
+          test "$(git rev-parse origin/fieldwork/explicit-abort-terminal-settlement)" = "$OLD_BASE"
+          test "$(git rev-parse origin/fieldwork/explicit-abort-terminal-settlement-repair)" = "$OLD_HEAD"
+          test "$(git rev-parse HEAD)" = "$CURRENT_BASE"
+
+      - name: Replay exact three-file repair with three-way merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary "$OLD_BASE".."$OLD_HEAD" -- \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts \
+            > /tmp/explicit-abort.patch
+          test -s /tmp/explicit-abort.patch
+          git apply --3way --index /tmp/explicit-abort.patch
+          mapfile -t changed < <(git diff --cached --name-only | sort)
+          expected=(
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+            packages/ai/src/generate-text/stream-text.ts
+          )
+          test "${changed[*]}" = "${expected[*]}"
+          git diff --cached --check
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format and verify source fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec prettier --write \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          git add -- \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          pnpm exec prettier --check \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          git diff --cached --check
+          test "$(git rev-parse HEAD)" = "$CURRENT_BASE"
+
+      - name: Build AI dependency closure
+        run: pnpm turbo build --filter=ai...
+
+      - name: Run Node explicit-abort controls
+        run: |
+          pnpm --filter ai exec vitest \
+            --config vitest.node.config.js --run \
+            src/generate-text/stream-text-explicit-abort-races.test.ts \
+            src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+
+      - name: Run Edge explicit-abort controls
+        if: matrix.node == 22
+        run: |
+          pnpm --filter ai exec vitest \
+            --config vitest.edge.config.js --run \
+            src/generate-text/stream-text-explicit-abort-races.test.ts
+
+      - name: Run package typecheck
+        if: matrix.node == 22
+        run: pnpm --filter ai type-check
+
+  publish:
+    needs: focused
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out current-main base with publication credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CURRENT_BASE }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch and replay immutable repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin \
+            refs/heads/fieldwork/explicit-abort-terminal-settlement:refs/remotes/origin/fieldwork/explicit-abort-terminal-settlement \
+            refs/heads/fieldwork/explicit-abort-terminal-settlement-repair:refs/remotes/origin/fieldwork/explicit-abort-terminal-settlement-repair
+          test "$(git rev-parse origin/fieldwork/explicit-abort-terminal-settlement)" = "$OLD_BASE"
+          test "$(git rev-parse origin/fieldwork/explicit-abort-terminal-settlement-repair)" = "$OLD_HEAD"
+          git diff --binary "$OLD_BASE".."$OLD_HEAD" -- \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts \
+            > /tmp/explicit-abort.patch
+          git apply --3way --index /tmp/explicit-abort.patch
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format and publish clean current-main source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec prettier --write \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          git add -- \
+            packages/ai/src/generate-text/stream-text.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts \
+            packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = "packages/ai/src/generate-text/stream-text-explicit-abort-races.test.ts packages/ai/src/generate-text/stream-text-explicit-abort-unhandled-rejections.test.ts packages/ai/src/generate-text/stream-text.ts "
+          git diff --cached --check
+          git config user.name 'Fieldwork Repair'
+          git config user.email 'fieldwork-repair@users.noreply.github.com'
+          git commit -m 'fix(ai): restack explicit abort terminal settlement on current main'
+          git push \
+            --force-with-lease=refs/heads/$TARGET_BRANCH:$CURRENT_BASE \
+            origin HEAD:refs/heads/$TARGET_BRANCH
