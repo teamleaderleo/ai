@@ -35,16 +35,6 @@ jobs:
                   raise SystemExit(f'{path}: expected one replacement, found {count}')
               p.write_text(text.replace(old, new, 1))
 
-          def replace_exact(path: str, old: str, new: str, expected: int):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != expected:
-                  raise SystemExit(
-                      f'{path}: expected {expected} replacements, found {count}'
-                  )
-              p.write_text(text.replace(old, new))
-
           open_responses = 'packages/open-responses/src/responses/open-responses-language-model.ts'
           replace_once(
               open_responses,
@@ -73,11 +63,15 @@ jobs:
               """          z.object({\n            type: z.literal('custom_tool_call'),\n            id: z.string(),\n            call_id: z.string(),\n            name: z.string(),\n            input: z.string(),\n            status: z.literal('completed'),\n          }),""",
               """          z.object({\n            type: z.literal('custom_tool_call'),\n            id: z.string(),\n            call_id: z.string(),\n            name: z.string(),\n            input: z.string(),\n            status: z.enum(['in_progress', 'completed', 'incomplete']),\n          }),""",
           )
-          replace_exact(
+          replace_once(
+              openai_api,
+              """            z.object({\n              type: z.literal('local_shell_call'),\n              id: z.string(),\n              call_id: z.string(),\n              action: z.object({""",
+              """            z.object({\n              type: z.literal('local_shell_call'),\n              id: z.string(),\n              call_id: z.string(),\n              status: z.enum(['in_progress', 'completed', 'incomplete']),\n              action: z.object({""",
+          )
+          replace_once(
               openai_api,
               """          z.object({\n            type: z.literal('local_shell_call'),\n            id: z.string(),\n            call_id: z.string(),\n            action: z.object({""",
               """          z.object({\n            type: z.literal('local_shell_call'),\n            id: z.string(),\n            call_id: z.string(),\n            status: z.enum(['in_progress', 'completed', 'incomplete']),\n            action: z.object({""",
-              2,
           )
 
           openai = 'packages/openai/src/responses/openai-responses-language-model.ts'
