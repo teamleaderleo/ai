@@ -3,6 +3,10 @@ name: Keep fork PR authors unassigned
 on:
   pull_request_target:
     types: [assigned]
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/unassign-pr-author.yml
 
 permissions:
   contents: read
@@ -10,6 +14,7 @@ permissions:
 jobs:
   unassign-author:
     if: >-
+      github.event_name == 'pull_request_target' &&
       github.repository == 'teamleaderleo/ai' &&
       github.event.assignee.login == github.event.pull_request.user.login
     runs-on: ubuntu-latest
@@ -22,3 +27,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PULL_REQUEST_URL: ${{ github.event.pull_request.html_url }}
           AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+
+  cleanup-existing:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'teamleaderleo/ai'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove authors from existing open PR assignments
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq '.[] | select(. as $pr | [$pr.assignees[].login] | index($pr.user.login)) | [.number, .user.login] | @tsv' \
+            | while IFS=$'\t' read -r number author; do
+                gh pr edit "$number" --remove-assignee "$author"
+              done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
