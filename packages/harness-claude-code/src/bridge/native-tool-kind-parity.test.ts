@@ -1,4 +1,5 @@
 import { createClaudeCode } from '../claude-code-harness';
+import { CLAUDE_CODE_NATIVE_TOOL_KINDS } from '../native-tool-kinds';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 type QueryArgs = {
@@ -10,6 +11,12 @@ type ToolUseKind = 'readonly' | 'edit' | 'bash';
 type CatalogTool = {
   nativeName?: string;
   toolUseKind?: ToolUseKind;
+};
+
+type CatalogEntry = {
+  key: string;
+  nativeName: string;
+  declaredKind?: ToolUseKind;
 };
 
 type CanUseTool = (
@@ -60,23 +67,23 @@ vi.mock('@ai-sdk/harness/bridge', () => ({
   },
 }));
 
-function catalogEntries(): Array<{
-  key: string;
-  nativeName: string;
-  kind: ToolUseKind;
-}> {
+function catalogEntries(): CatalogEntry[] {
   const tools = createClaudeCode().builtinTools as Record<string, CatalogTool>;
 
-  return Object.entries(tools).flatMap(([key, tool]) => {
-    if (tool.toolUseKind == null) return [];
-    return [
-      {
-        key,
-        nativeName: tool.nativeName ?? key,
-        kind: tool.toolUseKind,
-      },
-    ];
-  });
+  return Object.entries(tools).map(([key, tool]) => ({
+    key,
+    nativeName: tool.nativeName ?? key,
+    declaredKind: tool.toolUseKind,
+  }));
+}
+
+function mappedKind(entry: CatalogEntry): ToolUseKind {
+  const kind = CLAUDE_CODE_NATIVE_TOOL_KINDS[entry.nativeName];
+  expect.soft(
+    kind,
+    `${entry.key} (${entry.nativeName}) must have a shared permission kind`,
+  ).toBeDefined();
+  return kind!;
 }
 
 async function loadOptions(
@@ -101,6 +108,10 @@ function askRules(options: Record<string, unknown>): string[] {
   return settings?.permissions?.ask ?? [];
 }
 
+function sorted(values: Iterable<string>): string[] {
+  return [...values].sort();
+}
+
 describe('Claude public catalog / bridge permission-kind parity', () => {
   beforeEach(() => {
     state.queryArgs = [];
@@ -123,69 +134,100 @@ describe('Claude public catalog / bridge permission-kind parity', () => {
     vi.resetModules();
   });
 
-  test('allow-reads callback matches every explicitly declared public tool kind', async () => {
-    const declared = catalogEntries();
+  test('shared map covers the complete public native catalog and preserves every declared kind', () => {
+    const catalog = catalogEntries();
+    const catalogNames = new Set(catalog.map(entry => entry.nativeName));
+    const mappedNames = new Set(Object.keys(CLAUDE_CODE_NATIVE_TOOL_KINDS));
+
+    expect(catalog.length).toBeGreaterThan(0);
+    expect(sorted(mappedNames)).toEqual(sorted(catalogNames));
+
+    for (const entry of catalog) {
+      const kind = mappedKind(entry);
+      if (entry.declaredKind !== undefined) {
+        expect.soft(
+          kind,
+          `${entry.key} (${entry.nativeName}) declared kind must match shared kind`,
+        ).toBe(entry.declaredKind);
+      }
+    }
+  });
+
+  test('allow-reads callback matches the shared kind for every public built-in', async () => {
+    const catalog = catalogEntries();
     const options = await loadOptions('allow-reads');
     const canUseTool = options.canUseTool as CanUseTool;
 
-    expect(declared.length).toBeGreaterThan(0);
-
-    for (const entry of declared) {
+    for (const entry of catalog) {
+      const kind = mappedKind(entry);
       const result = await canUseTool(
         entry.nativeName,
         {},
         { toolUseID: `allow-reads:${entry.nativeName}` },
       );
-      const expected = entry.kind === 'readonly' ? 'allow' : 'deny';
+      const expected = kind === 'readonly' ? 'allow' : 'deny';
       expect.soft(
         result.behavior,
-        `${entry.key} (${entry.nativeName}) public kind=${entry.kind}`,
+        `${entry.key} (${entry.nativeName}) shared kind=${kind}`,
       ).toBe(expected);
     }
   });
 
-  test('allow-edits callback matches every explicitly declared public tool kind', async () => {
-    const declared = catalogEntries();
+  test('allow-edits callback matches the shared kind for every public built-in', async () => {
+    const catalog = catalogEntries();
     const options = await loadOptions('allow-edits');
     const canUseTool = options.canUseTool as CanUseTool;
 
-    for (const entry of declared) {
+    for (const entry of catalog) {
+      const kind = mappedKind(entry);
       const result = await canUseTool(
         entry.nativeName,
         {},
         { toolUseID: `allow-edits:${entry.nativeName}` },
       );
-      const expected = entry.kind === 'bash' ? 'deny' : 'allow';
+      const expected = kind === 'bash' ? 'deny' : 'allow';
       expect.soft(
         result.behavior,
-        `${entry.key} (${entry.nativeName}) public kind=${entry.kind}`,
+        `${entry.key} (${entry.nativeName}) shared kind=${kind}`,
       ).toBe(expected);
     }
   });
 
-  test('generated ask rules include every explicitly declared bash tool in allow-edits', async () => {
-    const declared = catalogEntries();
+  test('allow-edits ask rules exactly match bash-class public built-ins', async () => {
+    const catalog = catalogEntries();
     const options = await loadOptions('allow-edits');
-    const rules = new Set(askRules(options));
+    const expected = catalog
+      .filter(entry => mappedKind(entry) === 'bash')
+      .map(entry => `${entry.nativeName}(*)`);
 
-    for (const entry of declared.filter(entry => entry.kind === 'bash')) {
-      expect.soft(
-        rules.has(`${entry.nativeName}(*)`),
-        `${entry.key} (${entry.nativeName}) should have a bash-class ask rule`,
-      ).toBe(true);
-    }
+    expect(sorted(askRules(options))).toEqual(sorted(expected));
   });
 
-  test('generated ask rules include every explicitly declared edit/bash tool in allow-reads', async () => {
-    const declared = catalogEntries();
+  test('allow-reads ask rules exactly match edit/bash public built-ins', async () => {
+    const catalog = catalogEntries();
     const options = await loadOptions('allow-reads');
-    const rules = new Set(askRules(options));
+    const expected = catalog
+      .filter(entry => mappedKind(entry) !== 'readonly')
+      .map(entry => `${entry.nativeName}(*)`);
 
-    for (const entry of declared.filter(entry => entry.kind !== 'readonly')) {
-      expect.soft(
-        rules.has(`${entry.nativeName}(*)`),
-        `${entry.key} (${entry.nativeName}) public kind=${entry.kind} should ask in allow-reads`,
-      ).toBe(true);
-    }
+    expect(sorted(askRules(options))).toEqual(sorted(expected));
+  });
+
+  test('Agent remains approval-gated in allow-edits even when requesting bypassPermissions', async () => {
+    const options = await loadOptions('allow-edits');
+    const canUseTool = options.canUseTool as CanUseTool;
+    const result = await canUseTool(
+      'Agent',
+      {
+        description: 'Inspect delegated work.',
+        prompt: 'Inspect the project.',
+        mode: 'bypassPermissions',
+      },
+      { toolUseID: 'allow-edits:Agent' },
+    );
+
+    expect(result.behavior).toBe('deny');
+    expect(state.approvalRequests).toContain('allow-edits:Agent');
+    expect(askRules(options)).toContain('Agent(*)');
   });
 });
