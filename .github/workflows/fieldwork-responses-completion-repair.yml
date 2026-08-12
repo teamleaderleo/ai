@@ -63,6 +63,16 @@ jobs:
               """            z.object({\n              type: z.literal('function_call'),\n              call_id: z.string(),\n              name: z.string(),\n              arguments: z.string(),\n              id: z.string(),\n              namespace: z.string().nullish(),""",
               """            z.object({\n              type: z.literal('function_call'),\n              call_id: z.string(),\n              name: z.string(),\n              arguments: z.string(),\n              id: z.string(),\n              status: z.enum(['in_progress', 'completed', 'incomplete']),\n              namespace: z.string().nullish(),""",
           )
+          replace_once(
+              openai_api,
+              """            z.object({\n              type: z.literal('custom_tool_call'),\n              call_id: z.string(),\n              name: z.string(),\n              input: z.string(),\n              id: z.string(),\n            }),""",
+              """            z.object({\n              type: z.literal('custom_tool_call'),\n              call_id: z.string(),\n              name: z.string(),\n              input: z.string(),\n              id: z.string(),\n              status: z.enum(['in_progress', 'completed', 'incomplete']),\n            }),""",
+          )
+          replace_once(
+              openai_api,
+              """          z.object({\n            type: z.literal('custom_tool_call'),\n            id: z.string(),\n            call_id: z.string(),\n            name: z.string(),\n            input: z.string(),\n            status: z.literal('completed'),\n          }),""",
+              """          z.object({\n            type: z.literal('custom_tool_call'),\n            id: z.string(),\n            call_id: z.string(),\n            name: z.string(),\n            input: z.string(),\n            status: z.enum(['in_progress', 'completed', 'incomplete']),\n          }),""",
+          )
           replace_exact(
               openai_api,
               """          z.object({\n            type: z.literal('local_shell_call'),\n            id: z.string(),\n            call_id: z.string(),\n            action: z.object({""",
@@ -75,6 +85,11 @@ jobs:
               openai,
               """        case 'function_call': {\n          hasFunctionCall = true;""",
               """        case 'function_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          hasFunctionCall = true;""",
+          )
+          replace_once(
+              openai,
+              """        case 'custom_tool_call': {\n          hasFunctionCall = true;""",
+              """        case 'custom_tool_call': {\n          if (part.status !== 'completed') {\n            break;\n          }\n\n          hasFunctionCall = true;""",
           )
           replace_once(
               openai,
@@ -108,6 +123,16 @@ jobs:
           )
           replace_once(
               openai,
+              """              } else if (value.item.type === 'custom_tool_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n                hasFunctionCall = true;\n                const toolName = toolNameMapping.toCustomToolName(""",
+              """              } else if (value.item.type === 'custom_tool_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n                const toolName = toolNameMapping.toCustomToolName(""",
+          )
+          replace_once(
+              openai,
+              """                controller.enqueue({\n                  type: 'tool-input-end',\n                  id: value.item.call_id,\n                });\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName,""",
+              """                controller.enqueue({\n                  type: 'tool-input-end',\n                  id: value.item.call_id,\n                });\n\n                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                hasFunctionCall = true;\n\n                controller.enqueue({\n                  type: 'tool-call',\n                  toolCallId: value.item.call_id,\n                  toolName,""",
+          )
+          replace_once(
+              openai,
               """              } else if (value.item.type === 'local_shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                controller.enqueue({""",
               """              } else if (value.item.type === 'local_shell_call') {\n                ongoingToolCalls[value.output_index] = undefined;\n\n                if (value.item.status !== 'completed') {\n                  return;\n                }\n\n                controller.enqueue({""",
           )
@@ -131,17 +156,17 @@ jobs:
           replace_once(
               native_test,
               "type ApplyPatchStatus = 'completed' | 'in_progress';\n",
-              "type ApplyPatchStatus = 'completed' | 'in_progress';\ntype LocalShellStatus = 'completed' | 'incomplete';\ntype ToolSearchStatus = 'completed' | 'incomplete';\n",
+              "type ApplyPatchStatus = 'completed' | 'in_progress';\ntype CustomToolStatus = 'completed' | 'incomplete';\ntype LocalShellStatus = 'completed' | 'incomplete';\ntype ToolSearchStatus = 'completed' | 'incomplete';\n",
           )
           replace_once(
               native_test,
-              "  | { kind: 'applyPatch'; status: ApplyPatchStatus };",
-              "  | { kind: 'applyPatch'; status: ApplyPatchStatus }\n  | { kind: 'localShell'; status: LocalShellStatus }\n  | { kind: 'toolSearch'; status: ToolSearchStatus };",
+              """type StatusCase =\n  | { kind: 'function'; status: FunctionStatus }\n  | { kind: 'shell'; status: ShellStatus }\n  | { kind: 'applyPatch'; status: ApplyPatchStatus };""",
+              """type StatusCase =\n  | { kind: 'function'; status: FunctionStatus }\n  | { kind: 'shell'; status: ShellStatus }\n  | { kind: 'applyPatch'; status: ApplyPatchStatus }\n  | { kind: 'customTool'; status: CustomToolStatus }\n  | { kind: 'localShell'; status: LocalShellStatus }\n  | { kind: 'toolSearch'; status: ToolSearchStatus };""",
           )
           replace_once(
               native_test,
               """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n  }""",
-              """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n    case 'localShell':\n      return {\n        id: 'ls_1',\n        type: 'local_shell_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        action: {\n          type: 'exec' as const,\n          command: ['echo', 'fieldwork-sentinel'],\n          env: {},\n        },\n      };\n    case 'toolSearch':\n      return {\n        id: 'ts_1',\n        type: 'tool_search_call' as const,\n        execution: 'client' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        arguments: { goal: 'find a weather tool' },\n      };\n  }""",
+              """    case 'applyPatch':\n      return {\n        id: 'ap_1',\n        type: 'apply_patch_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        operation: { type: 'delete_file' as const, path: 'fieldwork-sentinel.txt' },\n      };\n    case 'customTool':\n      return {\n        id: 'ct_1',\n        type: 'custom_tool_call' as const,\n        call_id: 'call_1',\n        name: 'write_sql',\n        input: 'SELECT 1',\n        status: testCase.status,\n      };\n    case 'localShell':\n      return {\n        id: 'ls_1',\n        type: 'local_shell_call' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        action: {\n          type: 'exec' as const,\n          command: ['echo', 'fieldwork-sentinel'],\n          env: {},\n        },\n      };\n    case 'toolSearch':\n      return {\n        id: 'ts_1',\n        type: 'tool_search_call' as const,\n        execution: 'client' as const,\n        call_id: 'call_1',\n        status: testCase.status,\n        arguments: { goal: 'find a weather tool' },\n      };\n  }""",
           )
           replace_once(
               native_test,
@@ -151,12 +176,12 @@ jobs:
           replace_once(
               native_test,
               """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n  }""",
-              """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n    case 'localShell':\n      return [openaiTools.localShell({})];\n    case 'toolSearch':\n      return [\n        openaiTools.toolSearch({\n          execution: 'client',\n          description: 'Search available tools.',\n          parameters: {\n            type: 'object',\n            properties: { goal: { type: 'string' } },\n            required: ['goal'],\n            additionalProperties: false,\n          },\n        }),\n      ];\n  }""",
+              """    case 'applyPatch':\n      return [openaiTools.applyPatch({})];\n    case 'customTool':\n      return [\n        {\n          type: 'provider' as const,\n          id: 'openai.custom' as const,\n          name: 'write_sql',\n          args: {\n            description: 'Write a SQL query.',\n            format: { type: 'text' as const },\n          },\n        },\n      ];\n    case 'localShell':\n      return [openaiTools.localShell({})];\n    case 'toolSearch':\n      return [\n        openaiTools.toolSearch({\n          execution: 'client',\n          description: 'Search available tools.',\n          parameters: {\n            type: 'object',\n            properties: { goal: { type: 'string' } },\n            required: ['goal'],\n            additionalProperties: false,\n          },\n        }),\n      ];\n  }""",
           )
           replace_once(
               native_test,
               """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n];""",
-              """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n  { kind: 'localShell', status: 'completed' },\n  { kind: 'localShell', status: 'incomplete' },\n  { kind: 'toolSearch', status: 'completed' },\n  { kind: 'toolSearch', status: 'incomplete' },\n];""",
+              """  { kind: 'applyPatch', status: 'completed' },\n  { kind: 'applyPatch', status: 'in_progress' },\n  { kind: 'customTool', status: 'completed' },\n  { kind: 'customTool', status: 'incomplete' },\n  { kind: 'localShell', status: 'completed' },\n  { kind: 'localShell', status: 'incomplete' },\n  { kind: 'toolSearch', status: 'completed' },\n  { kind: 'toolSearch', status: 'incomplete' },\n];""",
           )
           PY
       - name: Install dependencies
