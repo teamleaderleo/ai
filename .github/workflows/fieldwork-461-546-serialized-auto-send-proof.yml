@@ -1,0 +1,227 @@
+name: Fieldwork 461 546 serialized auto-send proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact public-base carrier
+        run: |
+          BASE=f9d847d90a6e13410534b8a00cdfd6c03f564075
+          git merge-base --is-ancestor "$BASE" HEAD
+          git diff --check "$BASE"...HEAD
+          git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+          printf '%s\n' .github/workflows/fieldwork-461-546-serialized-auto-send-proof.yml | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+
+      - name: Build baseline AI package and dependencies
+        run: pnpm exec turbo build --filter=ai
+
+      - name: Reproduce duplicate automatic continuation on baseline
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { AbstractChat } from './packages/ai/dist/index.js';
+
+          class State {
+            status = 'ready';
+            error = undefined;
+            messages = [{ id: 'assistant-1', role: 'assistant', parts: [] }];
+            pushMessage(message) { this.messages = this.messages.concat(message); }
+            popMessage() { this.messages = this.messages.slice(0, -1); }
+            replaceMessage(index, message) {
+              this.messages = [
+                ...this.messages.slice(0, index),
+                message,
+                ...this.messages.slice(index + 1),
+              ];
+            }
+            snapshot(value) { return value; }
+          }
+
+          class TestChat extends AbstractChat {
+            constructor(init) { super({ ...init, state: new State() }); }
+          }
+
+          const predicateResolvers = [];
+          let sendCount = 0;
+          const chat = new TestChat({
+            id: 'fieldwork-461-baseline',
+            generateId: () => `id-${sendCount}`,
+            transport: {
+              sendMessages: () => {
+                sendCount += 1;
+                return new Promise(() => {});
+              },
+              reconnectToStream: async () => null,
+            },
+            sendAutomaticallyWhen: () =>
+              new Promise(resolve => predicateResolvers.push(resolve)),
+          });
+
+          await Promise.all([
+            chat.addToolOutput({ tool: 'a', toolCallId: 'call-a', output: 'a' }),
+            chat.addToolOutput({ tool: 'b', toolCallId: 'call-b', output: 'b' }),
+          ]);
+
+          assert.equal(predicateResolvers.length, 2);
+          predicateResolvers[0](true);
+          predicateResolvers[1](true);
+          await new Promise(resolve => setImmediate(resolve));
+
+          assert.equal(sendCount, 2);
+          console.log('baseline duplicate sends:', sendCount);
+          NODE
+
+      - name: Apply serialized predicate-decision prototype
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/ai/src/ui/chat.ts')
+          text = path.read_text()
+          old = """        this.shouldSendAutomatically().then(shouldSend => {\n          if (shouldSend) {\n            // no await to avoid deadlocking\n            this.makeRequest({\n              trigger: 'submit-message',\n              messageId: this.lastMessage?.id,\n              ...options,\n            });\n          }\n        });\n"""
+          new = """        const shouldSend = await this.shouldSendAutomatically();\n          if (shouldSend) {\n            // Do not await the request: stream updates use the same executor.\n            void this.makeRequest({\n              trigger: 'submit-message',\n              messageId: this.lastMessage?.id,\n              ...options,\n            });\n          }\n"""
+          assert text.count(old) == 2, text.count(old)
+          path.write_text(text.replace(old, new))
+          PY
+
+          pnpm exec oxfmt packages/ai/src/ui/chat.ts
+          git diff -- packages/ai/src/ui/chat.ts
+
+      - name: Check repaired Chat formatting
+        run: pnpm exec oxfmt --check packages/ai/src/ui/chat.ts
+
+      - name: Rebuild repaired AI package
+        run: pnpm exec turbo build --filter=ai --force
+
+      - name: Prove coalescing and predicate rejection ownership
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { AbstractChat } from './packages/ai/dist/index.js';
+
+          class State {
+            status = 'ready';
+            error = undefined;
+            messages = [{ id: 'assistant-1', role: 'assistant', parts: [] }];
+            pushMessage(message) { this.messages = this.messages.concat(message); }
+            popMessage() { this.messages = this.messages.slice(0, -1); }
+            replaceMessage(index, message) {
+              this.messages = [
+                ...this.messages.slice(0, index),
+                message,
+                ...this.messages.slice(index + 1),
+              ];
+            }
+            snapshot(value) { return value; }
+          }
+
+          class TestChat extends AbstractChat {
+            constructor(init) { super({ ...init, state: new State() }); }
+          }
+
+          const predicateResolvers = [];
+          let sendCount = 0;
+          const chat = new TestChat({
+            id: 'fieldwork-461-repair',
+            generateId: () => `id-${sendCount}`,
+            transport: {
+              sendMessages: () => {
+                sendCount += 1;
+                return new Promise(() => {});
+              },
+              reconnectToStream: async () => null,
+            },
+            sendAutomaticallyWhen: () =>
+              new Promise(resolve => predicateResolvers.push(resolve)),
+          });
+
+          const first = chat.addToolOutput({
+            tool: 'a',
+            toolCallId: 'call-a',
+            output: 'a',
+          });
+          const second = chat.addToolOutput({
+            tool: 'b',
+            toolCallId: 'call-b',
+            output: 'b',
+          });
+
+          while (predicateResolvers.length === 0) {
+            await new Promise(resolve => setImmediate(resolve));
+          }
+          assert.equal(predicateResolvers.length, 1);
+          predicateResolvers[0](true);
+          await Promise.all([first, second]);
+          await new Promise(resolve => setImmediate(resolve));
+
+          assert.equal(predicateResolvers.length, 1);
+          assert.equal(sendCount, 1);
+          assert.equal(chat.status, 'submitted');
+
+          const predicateError = new Error('auto-send predicate failed');
+          let observedUnhandled = false;
+          const onUnhandled = () => { observedUnhandled = true; };
+          process.on('unhandledRejection', onUnhandled);
+
+          const rejectingChat = new TestChat({
+            id: 'fieldwork-546-repair',
+            generateId: () => 'id-reject',
+            transport: {
+              sendMessages: () => {
+                throw new Error('sendMessages should not run');
+              },
+              reconnectToStream: async () => null,
+            },
+            sendAutomaticallyWhen: async () => {
+              throw predicateError;
+            },
+          });
+
+          await assert.rejects(
+            rejectingChat.addToolOutput({
+              tool: 'a',
+              toolCallId: 'call-a',
+              output: 'a',
+            }),
+            error => error === predicateError,
+          );
+          await new Promise(resolve => setImmediate(resolve));
+          process.removeListener('unhandledRejection', onUnhandled);
+
+          assert.equal(observedUnhandled, false);
+          assert.equal(rejectingChat.status, 'ready');
+          assert.equal(rejectingChat.error, undefined);
+          console.log('repaired sends:', sendCount);
+          console.log('predicate rejection owned by addToolOutput');
+          NODE
+
+      - name: Type-check repaired AI package
+        run: pnpm -C packages/ai type-check
+
+      - name: Run existing Chat Node suite
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/ui/chat.test.ts
