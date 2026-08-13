@@ -1,0 +1,139 @@
+name: Fieldwork 546 auto-send rejection probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact public-base carrier
+        run: |
+          BASE=f9d847d90a6e13410534b8a00cdfd6c03f564075
+          git merge-base --is-ancestor "$BASE" HEAD
+          git diff --check "$BASE"...HEAD
+          git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+          printf '%s\n' .github/workflows/fieldwork-546-auto-send-rejection-probe.yml | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+
+      - name: Build AI package
+        run: pnpm -C packages/ai build
+
+      - name: Probe detached rejected sendAutomaticallyWhen promise
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { AbstractChat } from './packages/ai/dist/index.js';
+
+          class State {
+            status = 'ready';
+            error = undefined;
+            messages = [
+              {
+                id: 'assistant-1',
+                role: 'assistant',
+                parts: [],
+              },
+            ];
+
+            pushMessage(message) {
+              this.messages = this.messages.concat(message);
+            }
+
+            popMessage() {
+              this.messages = this.messages.slice(0, -1);
+            }
+
+            replaceMessage(index, message) {
+              this.messages = [
+                ...this.messages.slice(0, index),
+                message,
+                ...this.messages.slice(index + 1),
+              ];
+            }
+
+            snapshot(value) {
+              return value;
+            }
+          }
+
+          class TestChat extends AbstractChat {
+            constructor(init) {
+              super({ ...init, state: new State() });
+            }
+          }
+
+          const predicateError = new Error('auto-send predicate failed');
+          let sendCount = 0;
+          let observedUnhandled;
+
+          const unhandled = new Promise(resolve => {
+            process.once('unhandledRejection', reason => {
+              observedUnhandled = reason;
+              resolve();
+            });
+          });
+
+          const chat = new TestChat({
+            id: 'fieldwork-546-auto-send',
+            generateId: () => 'generated-id',
+            transport: {
+              sendMessages: async () => {
+                sendCount += 1;
+                return new ReadableStream({
+                  start(controller) {
+                    controller.close();
+                  },
+                });
+              },
+              reconnectToStream: async () => null,
+            },
+            sendAutomaticallyWhen: async () => {
+              throw predicateError;
+            },
+          });
+
+          await chat.addToolOutput({
+            tool: 'demo',
+            toolCallId: 'tool-call-1',
+            output: 'done',
+          });
+
+          await Promise.race([
+            unhandled,
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('no unhandled rejection observed')),
+                250,
+              ),
+            ),
+          ]);
+
+          assert.equal(observedUnhandled, predicateError);
+          assert.equal(sendCount, 0);
+          assert.equal(chat.status, 'ready');
+          assert.equal(chat.error, undefined);
+
+          console.log('observed detached rejection:', predicateError.message);
+          NODE
