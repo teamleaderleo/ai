@@ -1,0 +1,320 @@
+name: Fieldwork 904 resource-aware relocation repair proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify characterization ancestry and carrier-only delta
+        run: |
+          CHARACTERIZATION=ae351c3556c1d2e617f51db4da71947740836424
+          git merge-base --is-ancestor "$CHARACTERIZATION" HEAD
+          git diff --check "$CHARACTERIZATION"...HEAD
+          git diff --name-only "$CHARACTERIZATION"...HEAD | sort > /tmp/actual
+          printf '%s\n' .github/workflows/fieldwork-904-resource-aware-relocation-repair-proof.yml | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+
+      - name: Apply resource-aware relocation prototype
+        run: |
+          cat > packages/ai/src/util/wrap-array-json-schema.ts <<'EOF'
+          import type { JSONSchema7 } from '@ai-sdk/provider';
+
+          type ExtendedJSONSchema7 = JSONSchema7 & {
+            $defs?: JSONSchema7['definitions'];
+          };
+
+          const arrayItemPointer = '#/properties/elements/items';
+
+          function pointsToHoistedDefinitions(reference: string): boolean {
+            return (
+              reference === '#/definitions' ||
+              reference.startsWith('#/definitions/') ||
+              reference === '#/$defs' ||
+              reference.startsWith('#/$defs/')
+            );
+          }
+
+          function rewriteOuterResourceReference(reference: string): string {
+            if (reference === '#') {
+              return arrayItemPointer;
+            }
+
+            if (!reference.startsWith('#/') || pointsToHoistedDefinitions(reference)) {
+              return reference;
+            }
+
+            return `${arrayItemPointer}${reference.slice(1)}`;
+          }
+
+          function rewriteLocalReferences(
+            value: unknown,
+            insideNestedResource = false,
+          ): unknown {
+            if (Array.isArray(value)) {
+              return value.map(item =>
+                rewriteLocalReferences(item, insideNestedResource),
+              );
+            }
+
+            if (value == null || typeof value !== 'object') {
+              return value;
+            }
+
+            const record = value as Record<string, unknown>;
+            const currentResourceIsNested =
+              insideNestedResource || typeof record.$id === 'string';
+            const result: Record<string, unknown> = {};
+
+            for (const [key, child] of Object.entries(record)) {
+              result[key] =
+                key === '$ref' &&
+                typeof child === 'string' &&
+                !currentResourceIsNested
+                  ? rewriteOuterResourceReference(child)
+                  : rewriteLocalReferences(child, currentResourceIsNested);
+            }
+
+            return result;
+          }
+
+          export function wrapArrayJsonSchema(jsonSchema: JSONSchema7): JSONSchema7 {
+            const { $schema: _$schema, ...schemaWithoutMeta } =
+              jsonSchema as ExtendedJSONSchema7;
+
+            // A root $id gives the element schema its own URI base. Keeping the
+            // complete schema together under items preserves its local refs.
+            if (typeof schemaWithoutMeta.$id === 'string') {
+              return {
+                $schema: 'http://json-schema.org/draft-07/schema#',
+                type: 'object',
+                properties: {
+                  elements: { type: 'array', items: schemaWithoutMeta },
+                },
+                required: ['elements'],
+                additionalProperties: false,
+              };
+            }
+
+            const { definitions, $defs, ...itemSchema } = schemaWithoutMeta;
+
+            const rewrittenDefinitions =
+              definitions == null
+                ? undefined
+                : (rewriteLocalReferences(definitions) as typeof definitions);
+            const rewrittenDefs =
+              $defs == null
+                ? undefined
+                : (rewriteLocalReferences($defs) as typeof $defs);
+            const rewrittenItemSchema = rewriteLocalReferences(
+              itemSchema,
+            ) as JSONSchema7;
+
+            return {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              ...(rewrittenDefinitions != null && {
+                definitions: rewrittenDefinitions,
+              }),
+              ...(rewrittenDefs != null && { $defs: rewrittenDefs }),
+              type: 'object',
+              properties: {
+                elements: { type: 'array', items: rewrittenItemSchema },
+              },
+              required: ['elements'],
+              additionalProperties: false,
+            };
+          }
+          EOF
+
+          python - <<'PY'
+          from pathlib import Path
+
+          output = Path('packages/ai/src/generate-text/output.ts')
+          text = output.read_text()
+          import_old = "import { parsePartialJson } from '../util/parse-partial-json';\n"
+          import_new = import_old + "import { wrapArrayJsonSchema } from '../util/wrap-array-json-schema';\n"
+          block_old = """    // JSON schema that describes an array of elements:\n    responseFormat: resolve(elementSchema.jsonSchema).then(jsonSchema => {\n      // keep root-level definitions available to root-relative references:\n      const {\n        $schema: _$schema,\n        definitions,\n        $defs,\n        ...itemSchema\n      } = jsonSchema as JSONSchema7 & {\n        $defs?: JSONSchema7['definitions'];\n      };\n\n      return {\n        type: 'json' as const,\n        schema: {\n          $schema: 'http://json-schema.org/draft-07/schema#',\n          ...(definitions != null && { definitions }),\n          ...($defs != null && { $defs }),\n          type: 'object',\n          properties: {\n            elements: { type: 'array', items: itemSchema },\n          },\n          required: ['elements'],\n          additionalProperties: false,\n        },\n        ...(name != null && { name }),\n        ...(description != null && { description }),\n      };\n    }),\n"""
+          block_new = """    // JSON schema that describes an array of elements:\n    responseFormat: resolve(elementSchema.jsonSchema).then(jsonSchema => ({\n      type: 'json' as const,\n      schema: wrapArrayJsonSchema(jsonSchema as JSONSchema7),\n      ...(name != null && { name }),\n      ...(description != null && { description }),\n    })),\n"""
+          assert text.count(import_old) == 1
+          assert text.count(block_old) == 1
+          text = text.replace(import_old, import_new).replace(block_old, block_new)
+          output.write_text(text)
+
+          strategy = Path('packages/ai/src/generate-object/output-strategy.ts')
+          text = strategy.read_text()
+          import_old = "import type { DeepPartial } from '../util/deep-partial';\n"
+          import_new = import_old + "import { wrapArrayJsonSchema } from '../util/wrap-array-json-schema';\n"
+          block_old = """    jsonSchema: async () => {\n      // keep root-level definitions available to root-relative references:\n      const {\n        $schema: _$schema,\n        definitions,\n        $defs,\n        ...itemSchema\n      } = (await schema.jsonSchema) as JSONSchema7 & {\n        $defs?: JSONSchema7['definitions'];\n      };\n\n      return {\n        $schema: 'http://json-schema.org/draft-07/schema#',\n        ...(definitions != null && { definitions }),\n        ...($defs != null && { $defs }),\n        type: 'object',\n        properties: {\n          elements: { type: 'array', items: itemSchema },\n        },\n        required: ['elements'],\n        additionalProperties: false,\n      };\n    },\n"""
+          block_new = """    jsonSchema: async () =>\n      wrapArrayJsonSchema((await schema.jsonSchema) as JSONSchema7),\n"""
+          assert text.count(import_old) == 1
+          assert text.count(block_old) == 1
+          text = text.replace(import_old, import_new).replace(block_old, block_new)
+          strategy.write_text(text)
+          PY
+
+          cat > packages/ai/src/generate-text/fieldwork-array-local-ref-repair.test.ts <<'EOF'
+          import type { JSONSchema7 } from '@ai-sdk/provider';
+          import { jsonSchema } from '@ai-sdk/provider-utils';
+          import { describe, expect, it } from 'vitest';
+          import { getOutputStrategy } from '../generate-object/output-strategy';
+          import { array } from './output';
+
+          const itemPointer = '#/properties/elements/items';
+
+          async function outputArraySchema(schema: JSONSchema7) {
+            const result = await array({ element: jsonSchema(schema) }).responseFormat;
+            expect(result?.type).toBe('json');
+            return (result as { schema: JSONSchema7 }).schema;
+          }
+
+          function itemSchema(schema: JSONSchema7): JSONSchema7 {
+            const properties = schema.properties as Record<string, JSONSchema7>;
+            const elements = properties.elements;
+            return elements.items as JSONSchema7;
+          }
+
+          describe('Fieldwork #904: resource-aware array schema relocation proof', () => {
+            it('rewrites outer-resource property refs in both array wrappers', async () => {
+              const input: JSONSchema7 = {
+                type: 'object',
+                properties: {
+                  shared: { type: 'string' },
+                  copy: { $ref: '#/properties/shared' },
+                },
+              };
+
+              const outputSchema = await outputArraySchema(input);
+              expect(
+                (itemSchema(outputSchema).properties as Record<string, JSONSchema7>)
+                  .copy,
+              ).toEqual({ $ref: `${itemPointer}/properties/shared` });
+
+              const strategy = getOutputStrategy({
+                output: 'array',
+                schema: jsonSchema(input),
+              });
+              const strategySchema = (await strategy.jsonSchema()) as JSONSchema7;
+              expect(
+                (itemSchema(strategySchema).properties as Record<string, JSONSchema7>)
+                  .copy,
+              ).toEqual({ $ref: `${itemPointer}/properties/shared` });
+
+              expect(
+                (input.properties as Record<string, JSONSchema7>).copy,
+              ).toEqual({ $ref: '#/properties/shared' });
+            });
+
+            it('keeps definition refs rooted while rewriting refs from hoisted definitions back into the item', async () => {
+              const schema = await outputArraySchema({
+                type: 'object',
+                definitions: {
+                  Helper: {
+                    type: 'object',
+                    properties: {
+                      copy: { $ref: '#/properties/shared' },
+                    },
+                  },
+                },
+                properties: {
+                  shared: { type: 'string' },
+                  helper: { $ref: '#/definitions/Helper' },
+                },
+              });
+
+              const item = itemSchema(schema);
+              expect(
+                (item.properties as Record<string, JSONSchema7>).helper,
+              ).toEqual({ $ref: '#/definitions/Helper' });
+
+              const helper = (schema.definitions as Record<string, JSONSchema7>)
+                .Helper;
+              expect(
+                (helper.properties as Record<string, JSONSchema7>).copy,
+              ).toEqual({ $ref: `${itemPointer}/properties/shared` });
+            });
+
+            it('does not rewrite refs inside a nested $id resource', async () => {
+              const schema = await outputArraySchema({
+                type: 'object',
+                properties: {
+                  nested: {
+                    $id: 'nested.json',
+                    type: 'object',
+                    properties: {
+                      shared: { type: 'string' },
+                      copy: { $ref: '#/properties/shared' },
+                    },
+                  },
+                },
+              });
+
+              const nested = (
+                itemSchema(schema).properties as Record<string, JSONSchema7>
+              ).nested;
+              expect(
+                (nested.properties as Record<string, JSONSchema7>).copy,
+              ).toEqual({ $ref: '#/properties/shared' });
+            });
+
+            it('keeps root-$id definitions inside the item resource', async () => {
+              const schema = await outputArraySchema({
+                $id: 'https://example.test/element',
+                type: 'object',
+                definitions: {
+                  Shared: { type: 'string' },
+                },
+                properties: {
+                  copy: { $ref: '#/definitions/Shared' },
+                },
+              });
+
+              expect(schema.definitions).toBeUndefined();
+              const item = itemSchema(schema);
+              expect(item.$id).toBe('https://example.test/element');
+              expect(item.definitions).toEqual({ Shared: { type: 'string' } });
+              expect(
+                (item.properties as Record<string, JSONSchema7>).copy,
+              ).toEqual({ $ref: '#/definitions/Shared' });
+            });
+          });
+          EOF
+
+          pnpm exec oxfmt packages/ai/src/util/wrap-array-json-schema.ts packages/ai/src/generate-text/output.ts packages/ai/src/generate-object/output-strategy.ts packages/ai/src/generate-text/fieldwork-array-local-ref-repair.test.ts
+          git diff -- packages/ai/src/util/wrap-array-json-schema.ts packages/ai/src/generate-text/output.ts packages/ai/src/generate-object/output-strategy.ts packages/ai/src/generate-text/fieldwork-array-local-ref-repair.test.ts
+
+      - name: Check prototype formatting
+        run: pnpm exec oxfmt --check packages/ai/src/util/wrap-array-json-schema.ts packages/ai/src/generate-text/output.ts packages/ai/src/generate-object/output-strategy.ts packages/ai/src/generate-text/fieldwork-array-local-ref-repair.test.ts
+
+      - name: Type-check AI package
+        run: pnpm -C packages/ai type-check
+
+      - name: Build AI package
+        run: pnpm -C packages/ai build
+
+      - name: Run resource-aware repair controls
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/generate-text/fieldwork-array-local-ref-repair.test.ts
+
+      - name: Run existing output wrapper suites
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/generate-text/output.test.ts src/generate-object/output-strategy.test.ts
