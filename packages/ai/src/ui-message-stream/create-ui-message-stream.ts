@@ -27,7 +27,7 @@ import type { UIMessageStreamWriter } from './ui-message-stream-writer';
  */
 export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
   execute,
-  onError = () => 'An error occurred.', // prevent leaking server error details to the client by default
+  onError: customOnError = () => 'An error occurred.', // prevent leaking server error details to the client by default
   originalMessages,
   onStepEnd,
   onStepFinish,
@@ -67,6 +67,14 @@ export function createUIMessageStream<UI_MESSAGE extends UIMessage>({
 
   generateId?: IdGenerator;
 }): ReadableStream<InferUIMessageChunk<UI_MESSAGE>> {
+  const onError = (error: unknown): string => {
+    try {
+      return customOnError(error);
+    } catch {
+      return 'An error occurred.';
+    }
+  };
+
   let controller!: ReadableStreamDefaultController<
     InferUIMessageChunk<UI_MESSAGE>
   >;
