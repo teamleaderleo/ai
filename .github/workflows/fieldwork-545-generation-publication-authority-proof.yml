@@ -102,6 +102,7 @@ jobs:
 
           describe('Fieldwork #545: current request publication authority', () => {
             it('characterizes stale resume writes and client-tool callback after a newer submit', async () => {
+              const repaired = process.env.FIELDWORK_REPAIRED === '1';
               let resumeController!: ReadableStreamDefaultController<UIMessageChunk>;
               let reconnectAbortSignal: AbortSignal | undefined;
               const onToolCall = vi.fn();
@@ -188,14 +189,24 @@ jobs:
               resumeController.close();
               await resumePromise;
 
-              expect(onToolCall).toHaveBeenCalledTimes(1);
-              expect(chat.messages).not.toEqual(messagesAfterNewerSubmit);
-              expect(textParts(chat.messages)).toEqual([
-                { role: 'assistant', text: 'resumed' },
-                { role: 'user', text: 'new turn' },
-                { role: 'assistant', text: 'submitted' },
-                { role: 'assistant', text: 'resumed' },
-              ]);
+              if (repaired) {
+                expect(onToolCall).not.toHaveBeenCalled();
+                expect(chat.messages).toEqual(messagesAfterNewerSubmit);
+                expect(textParts(chat.messages)).toEqual([
+                  { role: 'assistant', text: 'resumed' },
+                  { role: 'user', text: 'new turn' },
+                  { role: 'assistant', text: 'submitted' },
+                ]);
+              } else {
+                expect(onToolCall).toHaveBeenCalledTimes(1);
+                expect(chat.messages).not.toEqual(messagesAfterNewerSubmit);
+                expect(textParts(chat.messages)).toEqual([
+                  { role: 'assistant', text: 'resumed' },
+                  { role: 'user', text: 'new turn' },
+                  { role: 'assistant', text: 'submitted' },
+                  { role: 'assistant', text: 'resumed' },
+                ]);
+              }
             });
           });
           EOF
@@ -208,7 +219,7 @@ jobs:
       - name: Reproduce current stale publication and tool callback
         run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/ui/fieldwork-current-generation-ownership.test.ts
 
-      - name: Apply generation-authority prototype and reverse discriminator
+      - name: Apply generation-authority prototype
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -218,41 +229,34 @@ jobs:
 
           field_old = """  private activeResponse: ActiveResponse<UI_MESSAGE> | undefined = undefined;\n  private activeResumeRequest: ActiveResumeRequest | undefined = undefined;\n  private jobExecutor = new SerialJobExecutor();\n"""
           field_new = """  private activeResponse: ActiveResponse<UI_MESSAGE> | undefined = undefined;\n  private activeResumeRequest: ActiveResumeRequest | undefined = undefined;\n  private requestGeneration = 0;\n  private jobExecutor = new SerialJobExecutor();\n"""
-          assert text.count(field_old) == 1
+          assert text.count(field_old) == 1, text.count(field_old)
           text = text.replace(field_old, field_new)
 
           entry_old = """  } & ChatRequestOptions) {\n    const abortController = new AbortController();\n"""
           entry_new = """  } & ChatRequestOptions) {\n    const requestGeneration = ++this.requestGeneration;\n    const abortController = new AbortController();\n"""
-          assert text.count(entry_old) == 1
+          assert text.count(entry_old) == 1, text.count(entry_old)
           text = text.replace(entry_old, entry_new)
 
           current_old = """    const isCurrentRequest = () =>\n      activeResumeRequest == null ||\n      this.activeResumeRequest === activeResumeRequest;\n"""
           current_new = """    const isCurrentRequest = () =>\n      this.requestGeneration === requestGeneration &&\n      (activeResumeRequest == null ||\n        this.activeResumeRequest === activeResumeRequest);\n"""
-          assert text.count(current_old) == 1
+          assert text.count(current_old) == 1, text.count(current_old)
           text = text.replace(current_old, current_new)
 
           job_old = """        this.jobExecutor.run(() => {\n          if (response.abortController.signal.aborted) {\n            return Promise.resolve();\n          }\n"""
           job_new = """        this.jobExecutor.run(() => {\n          if (\n            response.abortController.signal.aborted ||\n            !isCurrentRequest()\n          ) {\n            return Promise.resolve();\n          }\n"""
-          assert text.count(job_old) == 1
+          assert text.count(job_old) == 1, text.count(job_old)
           text = text.replace(job_old, job_new)
 
           auto_old = """    if (!isError && (await this.shouldSendAutomatically())) {\n"""
           auto_new = """    if (\n      isCurrentRequest() &&\n      !isError &&\n      (await this.shouldSendAutomatically())\n    ) {\n"""
-          assert text.count(auto_old) == 1
+          assert text.count(auto_old) == 1, text.count(auto_old)
           text = text.replace(auto_old, auto_new)
 
           chat.write_text(text)
-
-          test = Path('packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts')
-          text = test.read_text()
-          old = """              expect(onToolCall).toHaveBeenCalledTimes(1);\n              expect(chat.messages).not.toEqual(messagesAfterNewerSubmit);\n              expect(textParts(chat.messages)).toEqual([\n                { role: 'assistant', text: 'resumed' },\n                { role: 'user', text: 'new turn' },\n                { role: 'assistant', text: 'submitted' },\n                { role: 'assistant', text: 'resumed' },\n              ]);\n"""
-          new = """              expect(onToolCall).not.toHaveBeenCalled();\n              expect(chat.messages).toEqual(messagesAfterNewerSubmit);\n              expect(textParts(chat.messages)).toEqual([\n                { role: 'assistant', text: 'resumed' },\n                { role: 'user', text: 'new turn' },\n                { role: 'assistant', text: 'submitted' },\n              ]);\n"""
-          assert text.count(old) == 1
-          test.write_text(text.replace(old, new))
           PY
 
-          pnpm exec oxfmt packages/ai/src/ui/chat.ts packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts
-          git diff -- packages/ai/src/ui/chat.ts packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts
+          pnpm exec oxfmt packages/ai/src/ui/chat.ts
+          git diff -- packages/ai/src/ui/chat.ts
 
       - name: Check repaired source and discriminator formatting
         run: pnpm exec oxfmt --check packages/ai/src/ui/chat.ts packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts
@@ -261,6 +265,8 @@ jobs:
         run: pnpm exec turbo build --filter=ai --force
 
       - name: Prove stale publication and tool callback are fenced
+        env:
+          FIELDWORK_REPAIRED: '1'
         run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/ui/fieldwork-current-generation-ownership.test.ts
 
       - name: Type-check repaired AI package
