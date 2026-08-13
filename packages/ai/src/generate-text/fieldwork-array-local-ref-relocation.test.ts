@@ -31,9 +31,10 @@ function expectCurrentRelocation(schema: JSONSchema7) {
 
 describe('Fieldwork #904: array output local JSON Schema references', () => {
   it('currently retargets a local property ref in Output.array()', async () => {
-    const result = await array({ element: createElementSchema() }).responseFormat;
+    const result = await array({ element: createElementSchema() })
+      .responseFormat;
 
-    expect(result.type).toBe('json');
+    expect(result?.type).toBe('json');
     expectCurrentRelocation((result as { schema: JSONSchema7 }).schema);
   });
 
