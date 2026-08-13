@@ -1,0 +1,276 @@
+name: Fieldwork 545 generation publication authority proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify exact public-base carrier
+        run: |
+          BASE=f9d847d90a6e13410534b8a00cdfd6c03f564075
+          git merge-base --is-ancestor "$BASE" HEAD
+          git diff --check "$BASE"...HEAD
+          git diff --name-only "$BASE"...HEAD | sort > /tmp/actual
+          printf '%s\n' .github/workflows/fieldwork-545-generation-publication-authority-proof.yml | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/actual
+
+      - name: Materialize current overlap discriminator
+        run: |
+          cat > packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts <<'EOF'
+          import { mockId } from '@ai-sdk/provider-utils/test';
+          import { describe, expect, it, vi } from 'vitest';
+          import type { UIMessageChunk } from '../ui-message-stream/ui-message-chunks';
+          import {
+            AbstractChat,
+            type ChatInit,
+            type ChatState,
+            type ChatStatus,
+          } from './chat';
+          import type { UIMessage } from './ui-messages';
+
+          class TestChatState<UI_MESSAGE extends UIMessage>
+            implements ChatState<UI_MESSAGE>
+          {
+            status: ChatStatus = 'ready';
+            messages: UI_MESSAGE[];
+            error: Error | undefined = undefined;
+
+            constructor(initialMessages: UI_MESSAGE[] = []) {
+              this.messages = initialMessages;
+            }
+
+            pushMessage = (message: UI_MESSAGE) => {
+              this.messages = this.messages.concat(message);
+            };
+
+            popMessage = () => {
+              this.messages = this.messages.slice(0, -1);
+            };
+
+            replaceMessage = (index: number, message: UI_MESSAGE) => {
+              this.messages = [
+                ...this.messages.slice(0, index),
+                message,
+                ...this.messages.slice(index + 1),
+              ];
+            };
+
+            snapshot = <T>(value: T): T => structuredClone(value);
+          }
+
+          class TestChat extends AbstractChat<UIMessage> {
+            constructor(init: ChatInit<UIMessage>) {
+              super({
+                ...init,
+                state: new TestChatState(init.messages ?? []),
+              });
+            }
+          }
+
+          function textParts(messages: UIMessage[]) {
+            return messages.map(message => ({
+              role: message.role,
+              text: message.parts
+                .filter(part => part.type === 'text')
+                .map(part => part.text)
+                .join(''),
+            }));
+          }
+
+          describe('Fieldwork #545: current request publication authority', () => {
+            it('characterizes stale resume writes and client-tool callback after a newer submit', async () => {
+              const repaired = process.env.FIELDWORK_REPAIRED === '1';
+              let resumeController!: ReadableStreamDefaultController<UIMessageChunk>;
+              let reconnectAbortSignal: AbortSignal | undefined;
+              const onToolCall = vi.fn();
+
+              const resumeStream = new ReadableStream<UIMessageChunk>({
+                start(controller) {
+                  resumeController = controller;
+                  controller.enqueue({
+                    type: 'start',
+                    messageId: 'resumed-assistant',
+                  });
+                  controller.enqueue({ type: 'start-step' });
+                  controller.enqueue({ type: 'text-start', id: 'resume-text' });
+                  controller.enqueue({
+                    type: 'text-delta',
+                    id: 'resume-text',
+                    delta: 'resumed',
+                  });
+                },
+              });
+
+              const submitStream = new ReadableStream<UIMessageChunk>({
+                start(controller) {
+                  controller.enqueue({
+                    type: 'start',
+                    messageId: 'submitted-assistant',
+                  });
+                  controller.enqueue({ type: 'start-step' });
+                  controller.enqueue({ type: 'text-start', id: 'submit-text' });
+                  controller.enqueue({
+                    type: 'text-delta',
+                    id: 'submit-text',
+                    delta: 'submitted',
+                  });
+                  controller.enqueue({ type: 'text-end', id: 'submit-text' });
+                  controller.enqueue({ type: 'finish-step' });
+                  controller.enqueue({ type: 'finish', finishReason: 'stop' });
+                  controller.close();
+                },
+              });
+
+              const chat = new TestChat({
+                id: '123',
+                generateId: mockId(),
+                transport: {
+                  reconnectToStream: async options => {
+                    reconnectAbortSignal = options.abortSignal;
+                    return resumeStream;
+                  },
+                  sendMessages: async () => submitStream,
+                },
+                onToolCall,
+                onFinish: () => {},
+              });
+
+              const resumePromise = chat.resumeStream();
+
+              await vi.waitFor(() => {
+                expect(textParts(chat.messages)).toEqual([
+                  { role: 'assistant', text: 'resumed' },
+                ]);
+              });
+
+              await chat.sendMessage({ text: 'new turn' });
+
+              expect(reconnectAbortSignal?.aborted).toBe(false);
+              expect(textParts(chat.messages)).toEqual([
+                { role: 'assistant', text: 'resumed' },
+                { role: 'user', text: 'new turn' },
+                { role: 'assistant', text: 'submitted' },
+              ]);
+
+              const messagesAfterNewerSubmit = structuredClone(chat.messages);
+
+              resumeController.enqueue({
+                type: 'tool-input-available',
+                toolCallId: 'stale-tool-call',
+                toolName: 'stale-tool',
+                input: { value: 1 },
+              });
+              resumeController.enqueue({ type: 'text-end', id: 'resume-text' });
+              resumeController.enqueue({ type: 'finish-step' });
+              resumeController.enqueue({ type: 'finish', finishReason: 'stop' });
+              resumeController.close();
+              await resumePromise;
+
+              if (repaired) {
+                expect(onToolCall).not.toHaveBeenCalled();
+                expect(chat.messages).toEqual(messagesAfterNewerSubmit);
+                expect(textParts(chat.messages)).toEqual([
+                  { role: 'assistant', text: 'resumed' },
+                  { role: 'user', text: 'new turn' },
+                  { role: 'assistant', text: 'submitted' },
+                ]);
+              } else {
+                expect(onToolCall).toHaveBeenCalledTimes(1);
+                expect(chat.messages).not.toEqual(messagesAfterNewerSubmit);
+                expect(textParts(chat.messages)).toEqual([
+                  { role: 'assistant', text: 'resumed' },
+                  { role: 'user', text: 'new turn' },
+                  { role: 'assistant', text: 'submitted' },
+                  { role: 'assistant', text: 'resumed' },
+                ]);
+              }
+            });
+          });
+          EOF
+
+          pnpm exec oxfmt packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts
+
+      - name: Build baseline AI package and dependencies
+        run: pnpm exec turbo build --filter=ai
+
+      - name: Reproduce current stale publication and tool callback
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/ui/fieldwork-current-generation-ownership.test.ts
+
+      - name: Apply generation-authority prototype
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          chat = Path('packages/ai/src/ui/chat.ts')
+          text = chat.read_text()
+
+          field_old = """  private activeResponse: ActiveResponse<UI_MESSAGE> | undefined = undefined;\n  private activeResumeRequest: ActiveResumeRequest | undefined = undefined;\n  private jobExecutor = new SerialJobExecutor();\n"""
+          field_new = """  private activeResponse: ActiveResponse<UI_MESSAGE> | undefined = undefined;\n  private activeResumeRequest: ActiveResumeRequest | undefined = undefined;\n  private requestGeneration = 0;\n  private jobExecutor = new SerialJobExecutor();\n"""
+          assert text.count(field_old) == 1, text.count(field_old)
+          text = text.replace(field_old, field_new)
+
+          entry_old = """  } & ChatRequestOptions) {\n    const abortController = new AbortController();\n"""
+          entry_new = """  } & ChatRequestOptions) {\n    const requestGeneration = ++this.requestGeneration;\n    const abortController = new AbortController();\n"""
+          assert text.count(entry_old) == 1, text.count(entry_old)
+          text = text.replace(entry_old, entry_new)
+
+          current_old = """    const isCurrentRequest = () =>\n      activeResumeRequest == null ||\n      this.activeResumeRequest === activeResumeRequest;\n"""
+          current_new = """    const isCurrentRequest = () =>\n      this.requestGeneration === requestGeneration &&\n      (activeResumeRequest == null ||\n        this.activeResumeRequest === activeResumeRequest);\n"""
+          assert text.count(current_old) == 1, text.count(current_old)
+          text = text.replace(current_old, current_new)
+
+          job_old = """        this.jobExecutor.run(() => {\n          if (response.abortController.signal.aborted) {\n            return Promise.resolve();\n          }\n"""
+          job_new = """        this.jobExecutor.run(() => {\n          if (\n            response.abortController.signal.aborted ||\n            !isCurrentRequest()\n          ) {\n            return Promise.resolve();\n          }\n"""
+          assert text.count(job_old) == 1, text.count(job_old)
+          text = text.replace(job_old, job_new)
+
+          auto_old = """    if (!isError && (await this.shouldSendAutomatically())) {\n"""
+          auto_new = """    if (\n      isCurrentRequest() &&\n      !isError &&\n      (await this.shouldSendAutomatically())\n    ) {\n"""
+          assert text.count(auto_old) == 1, text.count(auto_old)
+          text = text.replace(auto_old, auto_new)
+
+          chat.write_text(text)
+          PY
+
+          pnpm exec oxfmt packages/ai/src/ui/chat.ts
+          git diff -- packages/ai/src/ui/chat.ts
+
+      - name: Check repaired source and discriminator formatting
+        run: pnpm exec oxfmt --check packages/ai/src/ui/chat.ts packages/ai/src/ui/fieldwork-current-generation-ownership.test.ts
+
+      - name: Rebuild repaired AI package
+        run: pnpm exec turbo build --filter=ai --force
+
+      - name: Prove stale publication and tool callback are fenced
+        env:
+          FIELDWORK_REPAIRED: '1'
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/ui/fieldwork-current-generation-ownership.test.ts
+
+      - name: Type-check repaired AI package
+        run: pnpm -C packages/ai type-check
+
+      - name: Run existing Chat Node suite including public overlap regression
+        run: pnpm -C packages/ai exec vitest --config vitest.node.config.js --run src/ui/chat.test.ts
