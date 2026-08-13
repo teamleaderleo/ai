@@ -25,6 +25,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Format focused test in execution workspace
+        run: |
+          pnpm exec oxfmt packages/ai/src/generate-text/fieldwork-abort-eof-precedence.test.ts
+          git diff -- packages/ai/src/generate-text/fieldwork-abort-eof-precedence.test.ts
+
       - name: Check focused test formatting
         run: pnpm exec oxfmt --check packages/ai/src/generate-text/fieldwork-abort-eof-precedence.test.ts
 
