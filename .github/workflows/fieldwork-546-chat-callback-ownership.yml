@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 3
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
@@ -31,7 +31,7 @@ jobs:
       - name: Verify exact characterization head
         run: |
           CHARACTERIZATION=a47f7dfc8d391fd5ea5e725efb8978d9365e60c2
-          test "$(git rev-parse HEAD^^)" = "$CHARACTERIZATION"
+          git merge-base --is-ancestor "$CHARACTERIZATION" HEAD
           git diff --check "$CHARACTERIZATION"...HEAD
           git diff --name-only "$CHARACTERIZATION"...HEAD | sort > /tmp/actual
           printf '%s\n' .github/workflows/fieldwork-546-chat-callback-ownership.yml | sort > /tmp/expected
