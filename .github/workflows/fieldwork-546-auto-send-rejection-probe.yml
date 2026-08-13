@@ -37,8 +37,8 @@ jobs:
           printf '%s\n' .github/workflows/fieldwork-546-auto-send-rejection-probe.yml | sort > /tmp/expected
           diff -u /tmp/expected /tmp/actual
 
-      - name: Build AI package
-        run: pnpm -C packages/ai build
+      - name: Build AI package and dependencies
+        run: pnpm exec turbo build --filter=ai
 
       - name: Probe detached rejected sendAutomaticallyWhen promise
         run: |
