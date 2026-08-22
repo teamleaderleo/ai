@@ -45,6 +45,29 @@ export async function saveChat({
   await writeChat(chat);
 }
 
+/**
+ * Persists the state transition that must complete before a new generation is
+ * constructed. This prevents the new run's first cancellation poll from
+ * inheriting a completed Stop request from the previous run.
+ *
+ * This is intentionally a sequential mitigation. It does not serialize other
+ * requests or provide run-scoped compare-and-set ownership.
+ */
+export async function prepareChatForNewRun({
+  id,
+  messages,
+}: {
+  id: string;
+  messages: MyUIMessage[];
+}): Promise<void> {
+  await saveChat({
+    id,
+    messages,
+    activeStreamId: null,
+    canceledAt: null,
+  });
+}
+
 export async function appendMessageToChat({
   id,
   message,

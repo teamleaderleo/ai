@@ -1,5 +1,5 @@
 import type { MyUIMessage } from '@/util/chat-schema';
-import { readChat, saveChat } from '@util/chat-store';
+import { prepareChatForNewRun, readChat, saveChat } from '@util/chat-store';
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
@@ -59,8 +59,10 @@ export async function POST(req: Request) {
     );
   }
 
-  // save the user message
-  saveChat({ id, messages, activeStreamId: null });
+  // Complete the sequential new-run state transition before constructing the
+  // provider request. The helper is deliberately narrower than run-scoped
+  // ownership; delayed or concurrent Stop requests still require a run ID.
+  await prepareChatForNewRun({ id, messages });
 
   const userStopSignal = new AbortController();
 
@@ -90,8 +92,8 @@ export async function POST(req: Request) {
           return { createdAt: Date.now() };
         }
       },
-      onFinish: ({ messages }) => {
-        saveChat({ id, messages, activeStreamId: null });
+      onFinish: async ({ messages }) => {
+        await saveChat({ id, messages, activeStreamId: null });
       },
     }),
     async consumeSseStream({ stream }) {
@@ -102,7 +104,7 @@ export async function POST(req: Request) {
       await streamContext.createNewResumableStream(streamId, () => stream);
 
       // update the chat with the streamId
-      saveChat({ id, activeStreamId: streamId });
+      await saveChat({ id, activeStreamId: streamId });
     },
   });
 }
